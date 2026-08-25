@@ -65,6 +65,8 @@ Environment: `PORT`, `DB_PATH`, `LLM_BASE_URL` (default `http://192.168.31.90:80
 go test ./...
 ```
 
+Open `http://localhost:8080`. Production: `https://mm.m-2.cc`.
+
 Health: `/healthz` (process), `/readyz` (round-trips the model).
 
 ## Local model notes
