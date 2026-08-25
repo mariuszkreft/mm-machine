@@ -60,6 +60,21 @@
   color: var(--mm-muted);
 }
 
+/* The "why am I being asked this" preamble sits above the question itself —
+   quieter and slightly smaller, so the question still reads as the point. */
+.onb-why {
+  font-size: var(--mm-text-sm);
+  margin-bottom: var(--mm-1);
+}
+
+/* The persistent skip affordance stays available from the very first
+   question, not just after two unproductive turns — a visitor who does not
+   want to answer must always have a visible way out to search. */
+.onb-skip {
+  margin-top: var(--mm-1);
+  font-size: var(--mm-text-sm);
+}
+
 @media (max-width: 480px) {
   .onb-edit-row { flex: 1 1 100%; }
   .onb-edit-rows { flex-direction: column; }
