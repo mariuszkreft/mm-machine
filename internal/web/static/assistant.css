@@ -1,0 +1,126 @@
+/* Assistant panel — shares the palette defined in app.css. */
+.assistant-section { scroll-margin-top: 80px; }
+
+.assistant-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 18px 40px rgba(17, 24, 39, .06);
+}
+
+.assistant-loading { padding: 24px; color: var(--muted); }
+
+.assistant-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.assistant-head .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, .15);
+}
+
+.assistant-head .model {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.assistant-log {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.bubble {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.bubble.user { background: rgba(37, 99, 235, .07); border-color: rgba(37, 99, 235, .25); }
+.bubble p { margin: 4px 0 0; white-space: pre-wrap; line-height: 1.5; }
+
+.bubble .who {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.assistant-form, .feedback-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.assistant-form input[name="message"], .feedback-form input[name="verbatim"] {
+  flex: 1 1 260px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: inherit;
+  background: var(--paper);
+}
+
+.assistant-form button, .feedback-form button, .offer-form button {
+  padding: 11px 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.feedback-form select, .offer-form select {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: inherit;
+  background: var(--panel);
+}
+
+.htmx-indicator { opacity: 0; color: var(--muted); font-size: 13px; transition: opacity .2s; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+
+.feedback-thanks { color: var(--green); font-size: 14px; }
+
+.offer-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 18px;
+}
+
+.offer-form input {
+  flex: 1 1 150px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: inherit;
+  background: var(--panel);
+}
+
+.site-foot {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 24px clamp(18px, 4vw, 56px);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
