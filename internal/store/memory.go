@@ -19,6 +19,8 @@ type Memory struct {
 	messages      []model.ChatMessage
 	feedback      []model.Feedback
 	backlog       []model.BacklogItem
+	profiles      map[string]model.Profile
+	searches      []model.SavedSearch
 	nextID        int64
 }
 
@@ -27,6 +29,7 @@ func NewMemory() *Memory {
 	return &Memory{
 		offers:        SeedOffers(),
 		conversations: map[string]model.Conversation{},
+		profiles:      map[string]model.Profile{},
 		nextID:        1,
 	}
 }
@@ -45,7 +48,7 @@ func matches(o model.Offer, f OfferFilter) bool {
 			return false
 		}
 	}
-	return true
+	return MatchesFacets(o, f)
 }
 
 func (m *Memory) ListOffers(_ context.Context, f OfferFilter) ([]model.Offer, error) {
@@ -246,6 +249,55 @@ func (m *Memory) SetBacklogStatus(_ context.Context, id int64, status string) er
 		}
 	}
 	return ErrNotFound
+}
+
+func (m *Memory) UpsertProfile(_ context.Context, p model.Profile) (model.Profile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.profiles[p.ID]
+	if ok {
+		p.CreatedAt = existing.CreatedAt
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now()
+	}
+	p.UpdatedAt = time.Now()
+	p.Completeness = Completeness(p)
+	m.profiles[p.ID] = p
+	return p, nil
+}
+
+func (m *Memory) GetProfile(_ context.Context, id string) (model.Profile, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.profiles[id]
+	if !ok {
+		return model.Profile{}, ErrNotFound
+	}
+	return p, nil
+}
+
+func (m *Memory) SaveSearch(_ context.Context, s model.SavedSearch) (model.SavedSearch, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s.ID = m.id()
+	if s.CreatedAt.IsZero() {
+		s.CreatedAt = time.Now()
+	}
+	m.searches = append(m.searches, s)
+	return s, nil
+}
+
+func (m *Memory) ListSavedSearches(_ context.Context, profileID string) ([]model.SavedSearch, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []model.SavedSearch{}
+	for _, s := range m.searches {
+		if s.ProfileID == profileID {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 func (m *Memory) Close() error { return nil }

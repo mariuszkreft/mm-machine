@@ -16,10 +16,20 @@ import (
 var ErrNotFound = errors.New("store: not found")
 
 // OfferFilter narrows a pipeline query. Zero value means "everything".
+//
+// The first three fields serve the pipeline UI; the facet fields serve search,
+// which turns a parsed Intent into one of these. Facets are OR within a field
+// and AND across fields.
 type OfferFilter struct {
 	Status string // "" or "all" means any
 	Query  string // free text over title, location, category, supplier
 	Limit  int    // 0 means no limit
+
+	Statuses     []string
+	Trades       []string
+	Regions      []string
+	Requirements []string
+	MinCrewSize  int
 }
 
 // FeedbackFilter narrows a feedback query.
@@ -59,6 +69,14 @@ type Store interface {
 	ReplaceBacklog(ctx context.Context, items []model.BacklogItem) error
 	ListBacklog(ctx context.Context) ([]model.BacklogItem, error)
 	SetBacklogStatus(ctx context.Context, id int64, status string) error
+
+	// Profiles — who the visitor is, learned during onboarding.
+	UpsertProfile(ctx context.Context, p model.Profile) (model.Profile, error)
+	GetProfile(ctx context.Context, id string) (model.Profile, error)
+
+	// Saved searches
+	SaveSearch(ctx context.Context, s model.SavedSearch) (model.SavedSearch, error)
+	ListSavedSearches(ctx context.Context, profileID string) ([]model.SavedSearch, error)
 
 	Close() error
 }

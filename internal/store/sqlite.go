@@ -157,6 +157,9 @@ func nonZeroUnix(t time.Time) int64 {
 
 // --- Offers -----------------------------------------------------------
 
+// ListOffers answers the pipeline and search queries. Status and free text are
+// pushed into SQL; the facet fields are applied afterwards through the shared
+// MatchesFacets helper so both backends agree on the semantics.
 func (s *SQLite) ListOffers(ctx context.Context, f OfferFilter) ([]model.Offer, error) {
 	query := `SELECT id, title, location, category, amount, budget, status, signal, supplier, progress, attention, created_at, updated_at FROM offers WHERE 1=1`
 	args := []any{}
@@ -185,6 +188,9 @@ func (s *SQLite) ListOffers(ctx context.Context, f OfferFilter) ([]model.Offer, 
 		o, err := scanOffer(rows)
 		if err != nil {
 			return nil, err
+		}
+		if !MatchesFacets(o, f) {
+			continue
 		}
 		out = append(out, o)
 	}

@@ -1,12 +1,13 @@
 package web
 
-// pageHTML is the full public page. Partials it references live below.
-const pageHTML = `<!doctype html>
+// aboutHTML is the story surface: what the product is and where it is going.
+// It is deliberately not the home page — the working surface is.
+const aboutHTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Montage Manager</title>
+  <title>Montage Manager — what it is</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
   <link rel="stylesheet" href="/static/app.css?v=4">
@@ -210,4 +211,78 @@ const perspectiveHTML = `{{define "perspective"}}<div id="perspective-panel" cla
       {{range .Perspective.Pain}}<li>{{.}}</li>{{end}}
     </ul>
   </div>
+</div>{{end}}`
+
+// shellHTML is the home surface: one prompt, one thread, nothing else above
+// the fold. Everything a visitor can do starts as a sentence.
+const shellHTML = `{{define "shell"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Montage Manager</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+  <link rel="stylesheet" href="/static/base.css?v=1">
+  <link rel="stylesheet" href="/static/onboarding.css?v=1">
+  <link rel="stylesheet" href="/static/search.css?v=1">
+</head>
+<body>
+<div class="mm-shell">
+  <header class="mm-top">
+    <a class="mm-brand" href="/"><span class="mm-brand-mark">MM</span><span>Montage Manager</span></a>
+    <nav>
+      <a href="/offers">Pipeline</a>
+      <a href="/about">What it is</a>
+      <a href="/dev">Dev loop</a>
+    </nav>
+  </header>
+
+  <main class="mm-main">
+    <section class="mm-ask">
+      <h1>{{.Headline}}</h1>
+      <p class="mm-lede">{{.Lede}}</p>
+      <form class="mm-prompt"
+            hx-post="/ask"
+            hx-target="#mm-thread"
+            hx-swap="beforeend"
+            hx-indicator="#mm-busy"
+            hx-on::after-request="this.reset(); this.querySelector('input').focus()">
+        <input name="message" autocomplete="off" autofocus
+               placeholder="{{.Placeholder}}" aria-label="What do you need?">
+        <button class="mm-btn" type="submit">Ask</button>
+      </form>
+      <div class="mm-suggest">
+        {{range .Suggestions}}
+        <button class="mm-chip" hx-post="/ask" hx-target="#mm-thread" hx-swap="beforeend"
+                hx-vals='{"message": "{{.}}"}' hx-indicator="#mm-busy">{{.}}</button>
+        {{end}}
+        <span id="mm-busy" class="htmx-indicator mm-muted">thinking…</span>
+      </div>
+    </section>
+
+    <div class="mm-thread" id="mm-thread">
+      {{template "greeting" .}}
+    </div>
+  </main>
+
+  <footer class="mm-foot">
+    <span>Montage Manager {{.Version}}</span>
+    <span class="mm-mono">local model: {{.LLMModel}}</span>
+    <a href="/about">what it is</a>
+    <a href="/dev">dev loop</a>
+  </footer>
+</div>
+</body>
+</html>{{end}}`
+
+// greetingHTML is the thread's first message: it differs for someone the app
+// already knows, which is the whole point of onboarding.
+const greetingHTML = `{{define "greeting"}}<div class="mm-msg mm">
+  <span class="mm-who">mm</span>
+  {{if .Profile.Known}}
+  <p>Welcome back. I have you as {{.Profile.Role}}{{if .Profile.Trades}} in {{range $i, $t := .Profile.Trades}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}{{if .Profile.Regions}} around {{index .Profile.Regions 0}}{{end}}. Ask for what you need and I will rank it against that.</p>
+  {{else}}
+  <p>Tell me what you need in your own words — a crew, a job, papers you are missing. I will work out the rest and ask only what I cannot infer.</p>
+  {{end}}
 </div>{{end}}`

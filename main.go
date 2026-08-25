@@ -14,6 +14,8 @@ import (
 	"mm-machine/internal/assistant"
 	"mm-machine/internal/devloop"
 	"mm-machine/internal/llm"
+	"mm-machine/internal/onboarding"
+	"mm-machine/internal/search"
 	"mm-machine/internal/store"
 	"mm-machine/internal/web"
 )
@@ -53,6 +55,32 @@ func main() {
 	web.Register(mux, deps)
 	assistant.Register(mux, deps)
 	devloop.Register(mux, deps)
+	onboard := onboarding.Register(mux, deps)
+	finder := search.Register(mux, deps)
+
+	// /ask is the single entry point behind the prompt. A visitor the app does
+	// not know yet is onboarded; everyone else is searching. Routing lives here
+	// rather than in either package so neither owns the other.
+	mux.HandleFunc("/ask", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		profile, err := onboarding.Ensure(w, r, deps)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !profile.Known() {
+			onboard.Turn(w, r)
+			return
+		}
+		finder.Query(w, r)
+	})
 
 	// The dev loop re-clusters feedback into the backlog on an interval
 	// (BACKLOG_INTERVAL, 0 disables).

@@ -14,6 +14,7 @@ import (
 
 	"mm-machine/internal/app"
 	"mm-machine/internal/model"
+	"mm-machine/internal/onboarding"
 	"mm-machine/internal/store"
 )
 
@@ -41,9 +42,10 @@ type Dashboard struct {
 
 // Handler serves the public surface.
 type Handler struct {
-	deps app.Deps
-	page *template.Template
-	part *template.Template
+	deps  app.Deps
+	page  *template.Template
+	shell *template.Template
+	part  *template.Template
 }
 
 var funcs = template.FuncMap{
@@ -54,12 +56,14 @@ var funcs = template.FuncMap{
 // Register wires the public routes onto mux and returns the handler.
 func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 	h := &Handler{
-		deps: deps,
-		page: template.Must(template.New("page").Funcs(funcs).Parse(pageHTML + offersHTML + perspectiveHTML)),
-		part: template.Must(template.New("partial").Funcs(funcs).Parse(offersHTML + perspectiveHTML)),
+		deps:  deps,
+		page:  template.Must(template.New("page").Funcs(funcs).Parse(aboutHTML + offersHTML + perspectiveHTML)),
+		shell: template.Must(template.New("shell").Funcs(funcs).Parse(shellHTML + greetingHTML)),
+		part:  template.Must(template.New("partial").Funcs(funcs).Parse(offersHTML + perspectiveHTML)),
 	}
 	mux.Handle("/static/", http.FileServer(http.FS(staticFS)))
 	mux.HandleFunc("/", h.home)
+	mux.HandleFunc("/about", h.about)
 	mux.HandleFunc("/offers", h.offers)
 	mux.HandleFunc("/perspective", h.perspective)
 	mux.HandleFunc("/offers/new", h.createOffer)
@@ -67,11 +71,53 @@ func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 	return h
 }
 
+// Shell is the view model of the home surface. It carries only what the prompt
+// and the greeting need — everything else arrives in the thread.
+type Shell struct {
+	Headline    string
+	Lede        string
+	Placeholder string
+	Suggestions []string
+	Version     string
+	LLMModel    string
+	Profile     model.Profile
+}
+
 func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
+	profile, _ := onboarding.Current(r, h.deps)
+	view := Shell{
+		Headline:    "What do you need?",
+		Lede:        "Describe the job, the crew or the paperwork in one sentence. Montage Manager works out the structure, finds the fit, and shows you why it matched.",
+		Placeholder: "6 fitters in Munich, 3 weeks, A1 ready",
+		Suggestions: suggestions(profile),
+		Version:     h.deps.Version,
+		LLMModel:    h.deps.LLMModel,
+		Profile:     profile,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.shell.ExecuteTemplate(w, "shell", view); err != nil {
+		log.Printf("web: render shell: %v", err)
+	}
+}
+
+// suggestions are the example prompts under the input. They change with what
+// the app already knows, so a returning visitor is never shown "who are you".
+func suggestions(p model.Profile) []string {
+	switch {
+	case p.Role == "executor":
+		return []string{"open jobs for my crew", "who needs steel work in NL", "what papers am I missing"}
+	case p.Role == "owner":
+		return []string{"crews for a Munich rooftop in October", "who can do sanitary in Vienna", "show my pipeline"}
+	default:
+		return []string{"I need 6 fitters in Munich", "my crew does electrical work in DACH", "how does this work"}
+	}
+}
+
+func (h *Handler) about(w http.ResponseWriter, r *http.Request) {
 	data, err := h.dashboard(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -79,7 +125,7 @@ func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.page.Execute(w, data); err != nil {
-		log.Printf("web: render home: %v", err)
+		log.Printf("web: render about: %v", err)
 	}
 }
 

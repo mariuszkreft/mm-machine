@@ -50,6 +50,18 @@ curl -fsS -X POST "$BASE/offers/new" \
   -d "title=Smoke test offer&location=Testville&category=QA&status=open" >/dev/null
 check "offer created"      "Smoke test offer" "$(curl -fsS "$BASE/offers?view=open")"
 
+echo "onboarding + search (live model):"
+JAR="$TMP/cookies"
+ASK1="$(curl -fsS -c "$JAR" -b "$JAR" -X POST "$BASE/ask" \
+  --data-urlencode "message=I need 6 electrical fitters in Munich for 3 weeks, A1 ready" --max-time 180)"
+check "onboarding learned"  "profile"         "$ASK1"
+ASK2="$(curl -fsS -c "$JAR" -b "$JAR" -X POST "$BASE/ask" \
+  --data-urlencode "message=show me open steel jobs in the Netherlands" --max-time 180)"
+check "search ranked"       "mm-results"      "$ASK2"
+check "match explained"     "mm-why"          "$ASK2"
+check "shell prompt"        "mm-prompt"       "$(curl -fsS "$BASE/")"
+check "about page kept"     "Montage Manager" "$(curl -fsS "$BASE/about")"
+
 echo "assistant (live model):"
 PANEL="$(curl -fsS "$BASE/assistant/panel?role=owner&route=home")"
 check "panel renders"      "assistant-panel" "$PANEL"

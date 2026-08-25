@@ -1,0 +1,439 @@
+/* Montage Manager design system — tokens and primitives.
+ *
+ * This file is the shared contract. Every surface (shell, onboarding, search,
+ * dev loop) styles itself with these tokens and primitives; a package may add
+ * its own CSS file for what is genuinely local to it, but must not redefine a
+ * token or restyle a primitive.
+ *
+ * Principles:
+ *   1. One conversation surface. The prompt is the primary control, everywhere.
+ *   2. Results are cards inside the thread, never a separate page state.
+ *   3. Every number a machine produced is explainable next to it.
+ *   4. Quiet chrome, loud content: type and spacing carry the hierarchy.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* palette — light */
+  --mm-bg: #f7f8fa;
+  --mm-surface: #ffffff;
+  --mm-surface-2: #f1f3f7;
+  --mm-ink: #0f1729;
+  --mm-ink-soft: #35415c;
+  --mm-muted: #6b7690;
+  --mm-line: #e2e6ee;
+  --mm-line-strong: #cbd2e0;
+  --mm-accent: #2f5bff;
+  --mm-accent-soft: rgba(47, 91, 255, .10);
+  --mm-accent-ink: #ffffff;
+  --mm-good: #12855a;
+  --mm-warn: #b3690a;
+  --mm-bad: #c62f3d;
+  --mm-focus: 0 0 0 3px rgba(47, 91, 255, .28);
+
+  /* type */
+  --mm-font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mm-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --mm-text-xs: .75rem;
+  --mm-text-sm: .875rem;
+  --mm-text-md: 1rem;
+  --mm-text-lg: 1.25rem;
+  --mm-text-xl: 1.75rem;
+  --mm-text-2xl: clamp(2rem, 4.5vw, 3rem);
+
+  /* space — 4px scale */
+  --mm-1: 4px;
+  --mm-2: 8px;
+  --mm-3: 12px;
+  --mm-4: 16px;
+  --mm-5: 24px;
+  --mm-6: 32px;
+  --mm-7: 48px;
+  --mm-8: 72px;
+
+  /* shape */
+  --mm-r-sm: 8px;
+  --mm-r-md: 14px;
+  --mm-r-lg: 20px;
+  --mm-r-pill: 999px;
+  --mm-shadow: 0 1px 2px rgba(15, 23, 41, .06), 0 12px 32px rgba(15, 23, 41, .07);
+  --mm-shadow-lift: 0 2px 6px rgba(15, 23, 41, .08), 0 24px 60px rgba(15, 23, 41, .12);
+
+  /* layout */
+  --mm-measure: 62ch;
+  --mm-max: 1080px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --mm-bg: #0b0f19;
+    --mm-surface: #121828;
+    --mm-surface-2: #182034;
+    --mm-ink: #eef2fb;
+    --mm-ink-soft: #c3cce0;
+    --mm-muted: #8d99b5;
+    --mm-line: #24304a;
+    --mm-line-strong: #33415f;
+    --mm-accent: #6d8dff;
+    --mm-accent-soft: rgba(109, 141, 255, .16);
+    --mm-accent-ink: #08101f;
+    --mm-good: #35c48c;
+    --mm-warn: #e0a33c;
+    --mm-bad: #ff6b78;
+    --mm-shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 32px rgba(0, 0, 0, .45);
+    --mm-shadow-lift: 0 2px 8px rgba(0, 0, 0, .55), 0 28px 70px rgba(0, 0, 0, .55);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font-family: var(--mm-font);
+  font-size: var(--mm-text-md);
+  line-height: 1.55;
+}
+
+a { color: inherit; }
+
+:where(button, input, select, textarea) { font: inherit; color: inherit; }
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--mm-focus);
+  border-radius: var(--mm-r-sm);
+}
+
+/* --- shell ---------------------------------------------------------------- */
+
+.mm-shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.mm-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--mm-4);
+  padding: var(--mm-3) clamp(var(--mm-4), 4vw, var(--mm-6));
+  background: color-mix(in srgb, var(--mm-bg) 88%, transparent);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--mm-line);
+}
+
+.mm-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mm-2);
+  font-weight: 600;
+  text-decoration: none;
+  letter-spacing: -.01em;
+}
+
+.mm-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--mm-r-sm);
+  background: var(--mm-ink);
+  color: var(--mm-bg);
+  font-size: var(--mm-text-xs);
+  font-weight: 700;
+}
+
+.mm-top nav {
+  display: flex;
+  gap: var(--mm-4);
+  margin-left: auto;
+  font-size: var(--mm-text-sm);
+  color: var(--mm-muted);
+}
+
+.mm-top nav a { text-decoration: none; }
+.mm-top nav a:hover { color: var(--mm-ink); }
+
+.mm-main {
+  width: min(100% - 2 * var(--mm-4), var(--mm-max));
+  margin-inline: auto;
+  padding: clamp(var(--mm-5), 5vw, var(--mm-8)) 0 var(--mm-8);
+}
+
+.mm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-4);
+  padding: var(--mm-5) clamp(var(--mm-4), 4vw, var(--mm-6));
+  border-top: 1px solid var(--mm-line);
+  color: var(--mm-muted);
+  font-size: var(--mm-text-xs);
+}
+
+/* --- prompt: the primary control ------------------------------------------ */
+
+.mm-ask { display: grid; gap: var(--mm-3); }
+
+.mm-ask h1 {
+  margin: 0;
+  font-size: var(--mm-text-2xl);
+  line-height: 1.1;
+  letter-spacing: -.03em;
+}
+
+.mm-ask .mm-lede {
+  margin: 0;
+  max-width: var(--mm-measure);
+  color: var(--mm-muted);
+}
+
+.mm-prompt {
+  display: flex;
+  align-items: center;
+  gap: var(--mm-2);
+  padding: var(--mm-2) var(--mm-2) var(--mm-2) var(--mm-4);
+  background: var(--mm-surface);
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-r-lg);
+  box-shadow: var(--mm-shadow);
+}
+
+.mm-prompt:focus-within { box-shadow: var(--mm-shadow-lift), var(--mm-focus); }
+
+.mm-prompt input,
+.mm-prompt textarea {
+  flex: 1;
+  min-width: 0;
+  padding: var(--mm-3) 0;
+  border: 0;
+  background: transparent;
+  font-size: var(--mm-text-lg);
+  resize: none;
+}
+
+.mm-prompt input:focus, .mm-prompt textarea:focus { outline: none; box-shadow: none; }
+
+.mm-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-2);
+  font-size: var(--mm-text-sm);
+  color: var(--mm-muted);
+}
+
+/* --- primitives ----------------------------------------------------------- */
+
+.mm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mm-2);
+  padding: var(--mm-2) var(--mm-4);
+  border: 1px solid transparent;
+  border-radius: var(--mm-r-pill);
+  background: var(--mm-accent);
+  color: var(--mm-accent-ink);
+  font-size: var(--mm-text-sm);
+  font-weight: 550;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.mm-btn:hover { filter: brightness(1.06); }
+.mm-btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+.mm-btn.ghost {
+  background: transparent;
+  border-color: var(--mm-line-strong);
+  color: var(--mm-ink-soft);
+}
+
+.mm-btn.quiet { background: transparent; color: var(--mm-muted); }
+
+.mm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mm-1);
+  padding: var(--mm-1) var(--mm-3);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-r-pill);
+  background: var(--mm-surface);
+  color: var(--mm-ink-soft);
+  font-size: var(--mm-text-xs);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.mm-chip:hover { border-color: var(--mm-accent); color: var(--mm-accent); }
+.mm-chip.on { background: var(--mm-accent-soft); border-color: var(--mm-accent); color: var(--mm-accent); }
+
+.mm-badge {
+  display: inline-flex;
+  padding: 2px var(--mm-2);
+  border-radius: var(--mm-r-sm);
+  background: var(--mm-surface-2);
+  color: var(--mm-muted);
+  font-size: var(--mm-text-xs);
+  font-weight: 550;
+  letter-spacing: .02em;
+}
+
+.mm-badge.good { background: color-mix(in srgb, var(--mm-good) 14%, transparent); color: var(--mm-good); }
+.mm-badge.warn { background: color-mix(in srgb, var(--mm-warn) 16%, transparent); color: var(--mm-warn); }
+.mm-badge.bad  { background: color-mix(in srgb, var(--mm-bad) 14%, transparent); color: var(--mm-bad); }
+
+.mm-panel {
+  padding: var(--mm-5);
+  background: var(--mm-surface);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-r-lg);
+  box-shadow: var(--mm-shadow);
+}
+
+.mm-field {
+  width: 100%;
+  padding: var(--mm-3) var(--mm-4);
+  border: 1px solid var(--mm-line-strong);
+  border-radius: var(--mm-r-md);
+  background: var(--mm-surface);
+}
+
+.mm-meter {
+  position: relative;
+  height: 6px;
+  border-radius: var(--mm-r-pill);
+  background: var(--mm-surface-2);
+  overflow: hidden;
+}
+
+.mm-meter > i {
+  display: block;
+  height: 100%;
+  background: var(--mm-accent);
+}
+
+.mm-empty {
+  padding: var(--mm-6);
+  border: 1px dashed var(--mm-line-strong);
+  border-radius: var(--mm-r-md);
+  color: var(--mm-muted);
+  text-align: center;
+}
+
+.mm-muted { color: var(--mm-muted); }
+.mm-mono { font-family: var(--mm-mono); font-size: var(--mm-text-xs); }
+
+/* --- thread: conversation + results ---------------------------------------- */
+
+.mm-thread {
+  display: grid;
+  gap: var(--mm-4);
+  margin-top: var(--mm-6);
+}
+
+.mm-msg {
+  display: grid;
+  gap: var(--mm-1);
+  max-width: var(--mm-measure);
+}
+
+.mm-msg .mm-who {
+  font-size: var(--mm-text-xs);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--mm-muted);
+}
+
+.mm-msg p { margin: 0; white-space: pre-wrap; }
+
+.mm-msg.you {
+  justify-self: end;
+  padding: var(--mm-3) var(--mm-4);
+  background: var(--mm-accent-soft);
+  border-radius: var(--mm-r-md) var(--mm-r-md) var(--mm-1) var(--mm-r-md);
+}
+
+.mm-msg.mm { color: var(--mm-ink); }
+
+.mm-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--mm-3);
+}
+
+.mm-card {
+  display: grid;
+  gap: var(--mm-2);
+  padding: var(--mm-4);
+  background: var(--mm-surface);
+  border: 1px solid var(--mm-line);
+  border-radius: var(--mm-r-md);
+  transition: border-color .15s, transform .15s;
+}
+
+.mm-card:hover { border-color: var(--mm-line-strong); transform: translateY(-1px); }
+
+.mm-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--mm-2);
+  font-size: var(--mm-text-xs);
+  color: var(--mm-muted);
+}
+
+.mm-card h3 { margin: 0; font-size: var(--mm-text-md); letter-spacing: -.01em; }
+
+.mm-fit {
+  margin-left: auto;
+  font-family: var(--mm-mono);
+  color: var(--mm-accent);
+}
+
+/* Why a machine-produced number is what it is. Never hide this. */
+.mm-why {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--mm-text-xs);
+  color: var(--mm-muted);
+}
+
+.mm-why li::before { content: "· "; }
+
+/* --- async states ---------------------------------------------------------- */
+
+.htmx-indicator { opacity: 0; transition: opacity .15s; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+
+.mm-skel {
+  height: 1em;
+  border-radius: var(--mm-r-sm);
+  background: linear-gradient(90deg, var(--mm-surface-2), var(--mm-line), var(--mm-surface-2));
+  background-size: 200% 100%;
+  animation: mm-shimmer 1.2s linear infinite;
+}
+
+@keyframes mm-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-skel { animation: none; }
+  .mm-card { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .mm-top nav { display: none; }
+  .mm-prompt input, .mm-prompt textarea { font-size: var(--mm-text-md); }
+}
