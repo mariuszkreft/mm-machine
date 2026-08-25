@@ -462,5 +462,5 @@ h1 {
     max-width: min(100%, 340px);
     font-size: 18px;
   }
-  .panel-head strong { font-size: 12px; }
+  .panel-head strong { display: none; }
 }
