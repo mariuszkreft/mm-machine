@@ -13,7 +13,9 @@ import (
 
 	"mm-machine/internal/app"
 	"mm-machine/internal/assistant"
+	"mm-machine/internal/demo"
 	"mm-machine/internal/devloop"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/onboarding"
@@ -56,12 +58,23 @@ func main() {
 	})
 	web.Register(mux, deps)
 	devloop.Register(mux, deps)
+	demo.Register(mux, deps)
 	onboard := onboarding.Register(mux, deps)
 	finder := search.Register(mux, deps)
 	helper := assistant.Register(mux, deps)
 
 	// /ask is the single entry point behind the prompt. Routing lives here
 	// rather than in any of the three packages so none of them owns the others.
+	// /lang switches language and returns where the visitor came from.
+	mux.HandleFunc("/lang", func(w http.ResponseWriter, r *http.Request) {
+		i18n.Set(w, i18n.Lang(r.FormValue("to")+r.URL.Query().Get("to")))
+		back := r.Referer()
+		if back == "" {
+			back = "/"
+		}
+		http.Redirect(w, r, back, http.StatusSeeOther)
+	})
+
 	mux.HandleFunc("/ask", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -99,6 +112,14 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      5 * time.Minute, // the assistant waits on the local model
 	}
+	// Fill an empty install with the demo market so the app is understandable
+	// the moment it is opened, and never overwrite what is already there.
+	seedCtx, cancelSeed := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := demo.Seed(seedCtx, db); err != nil {
+		log.Printf("demo: seed: %v", err)
+	}
+	cancelSeed()
+
 	log.Printf("mm-machine %s listening on %s (llm %s)", Version, srv.Addr, client.Model())
 	log.Fatal(srv.ListenAndServe())
 }

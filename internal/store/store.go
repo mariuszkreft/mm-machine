@@ -40,6 +40,34 @@ type FeedbackFilter struct {
 	Limit  int
 }
 
+// CrewFilter narrows a crew query, with the same OR-within/AND-across facet
+// semantics as OfferFilter.
+type CrewFilter struct {
+	Query     string
+	Trades    []string
+	Regions   []string
+	Documents []string
+	MinSize   int
+	Limit     int
+}
+
+// TextQuery is a full-text search across the corpus. Kinds may contain
+// "offer" and/or "crew"; empty means both.
+type TextQuery struct {
+	Text  string
+	Kinds []string
+	Limit int
+}
+
+// TextHit is one full-text result. Score is higher-is-better and comparable
+// only within one query.
+type TextHit struct {
+	Kind    string // offer | crew
+	ID      string
+	Score   float64
+	Snippet string
+}
+
 // Store is the persistence port used by every handler package.
 type Store interface {
 	// Offers
@@ -69,6 +97,15 @@ type Store interface {
 	ReplaceBacklog(ctx context.Context, items []model.BacklogItem) error
 	ListBacklog(ctx context.Context) ([]model.BacklogItem, error)
 	SetBacklogStatus(ctx context.Context, id int64, status string) error
+
+	// Crews — the supply side: deployable teams.
+	ListCrews(ctx context.Context, f CrewFilter) ([]model.Crew, error)
+	GetCrew(ctx context.Context, id string) (model.Crew, error)
+	UpsertCrew(ctx context.Context, c model.Crew) (model.Crew, error)
+
+	// TextSearch is the full-text index over offers and crews. Implementations
+	// must degrade to a substring scan rather than failing.
+	TextSearch(ctx context.Context, q TextQuery) ([]TextHit, error)
 
 	// Profiles — who the visitor is, learned during onboarding.
 	UpsertProfile(ctx context.Context, p model.Profile) (model.Profile, error)

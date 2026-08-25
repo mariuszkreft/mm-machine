@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/demo"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/onboarding"
 	"mm-machine/internal/store"
@@ -90,6 +92,7 @@ func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 // Shell is the view model of the home surface. It carries only what the prompt
 // and the greeting need — everything else arrives in the thread.
 type Shell struct {
+	T           i18n.Printer
 	Headline    string
 	Lede        string
 	Placeholder string
@@ -97,6 +100,10 @@ type Shell struct {
 	Version     string
 	LLMModel    string
 	Profile     model.Profile
+	// PersonaLabel is set while the visitor is looking around as an example
+	// profile, so the shell can say so and offer the way out.
+	PersonaLabel string
+	ProfileLine  string
 }
 
 func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
@@ -105,14 +112,20 @@ func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile, _ := onboarding.Current(r, h.deps)
+	printer := i18n.NewPrinter(r)
 	view := Shell{
-		Headline:    "What do you need?",
-		Lede:        "Describe the job, the crew or the paperwork in one sentence. Montage Manager works out the structure, finds the fit, and shows you why it matched.",
-		Placeholder: "6 fitters in Munich, 3 weeks, A1 ready",
-		Suggestions: suggestions(profile),
+		T:           printer,
+		Headline:    printer.T("home.headline"),
+		Lede:        printer.T("home.lede"),
+		Placeholder: printer.T("home.placeholder"),
+		Suggestions: suggestions(profile, printer, r),
 		Version:     h.deps.Version,
 		LLMModel:    h.deps.LLMModel,
 		Profile:     profile,
+		ProfileLine: profileLine(profile, printer),
+	}
+	if persona, ok := demo.ActivePersona(r); ok {
+		view.PersonaLabel = persona.Label
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.shell.ExecuteTemplate(w, "shell", view); err != nil {
@@ -121,17 +134,61 @@ func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
 }
 
 // suggestions are the example prompts under the input. They change with what
-// the app already knows, so a returning visitor is never shown "who are you".
-func suggestions(p model.Profile) []string {
+// the app already knows, so a returning visitor is never shown "who are you" —
+// and inside an example profile they are that persona's own questions.
+func suggestions(p model.Profile, printer i18n.Printer, r *http.Request) []string {
+	if persona, ok := demo.ActivePersona(r); ok {
+		if asks, found := persona.SampleAsks[printer.Code()]; found && len(asks) > 0 {
+			return asks
+		}
+	}
+	german := printer.Is("de")
 	switch {
 	case p.Role == "executor":
-		return []string{"open jobs for my crew", "who needs steel work in NL", "what papers am I missing"}
+		if german {
+			return []string{"Welche Aufträge passen zu meiner Kolonne?", "Wer sucht Stahlbau in den Niederlanden?", "Welche Papiere fehlen mir noch?"}
+		}
+		return []string{"Which jobs fit my crew?", "Who needs steel work in NL?", "Which papers am I missing?"}
 	case p.Role == "owner":
-		return []string{"crews for a Munich rooftop in October", "who can do sanitary in Vienna", "show my pipeline"}
+		if german {
+			return []string{"Elektrokolonne für München ab Oktober", "Wer kann Sanitär in Wien?", "Zeig mir meine Aufträge"}
+		}
+		return []string{"Electrical crew for Munich from October", "Who can do sanitary in Vienna?", "Show me my offers"}
 	default:
-		return []string{"I need 6 fitters in Munich", "my crew does electrical work in DACH", "how does this work"}
+		if german {
+			return []string{"Ich brauche 6 Monteure in München", "Meine Kolonne macht Elektro im DACH-Raum", "Wie funktioniert das hier?"}
+		}
+		return []string{"I need 6 fitters in Munich", "My crew does electrical work in DACH", "How does this work?"}
 	}
 }
+
+// profileLine renders the one-line summary the greeting uses, in the visitor's
+// language, so a returning visitor immediately sees what the app has on them.
+func profileLine(p model.Profile, printer i18n.Printer) string {
+	if !p.Known() {
+		return ""
+	}
+	parts := []string{printer.T("role." + p.Role)}
+	if parts[0] == "role."+p.Role {
+		parts[0] = p.Role
+	}
+	for _, trade := range p.Trades {
+		if label := printer.T("trade." + trade); label != "trade."+trade {
+			parts = append(parts, label)
+		} else {
+			parts = append(parts, trade)
+		}
+	}
+	if len(p.Regions) > 0 {
+		parts = append(parts, p.Regions[0])
+	}
+	if p.CrewSize > 0 {
+		parts = append(parts, itoa(p.CrewSize)+" "+printer.T("offer.crew"))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 func (h *Handler) about(w http.ResponseWriter, r *http.Request) {
 	data, err := h.dashboard(r)

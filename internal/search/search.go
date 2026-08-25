@@ -256,6 +256,18 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A Generalunternehmer asking for people wants the supply side: crews,
+	// not more job postings.
+	if WantsCrews(result.Intent, p) {
+		crewMatches, crewErr := RunCrews(ctx, h.deps, result.Intent, p)
+		if crewErr != nil {
+			http.Error(w, crewErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(crewMatches) > 0 {
+			result.Matches = crewMatches
+		}
+	}
 
 	display := result.Matches
 	if len(display) > displayLimit {

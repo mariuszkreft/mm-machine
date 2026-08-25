@@ -116,7 +116,7 @@ func Rank(offers []model.Offer, intent model.Intent, fc facets, p model.Profile)
 		if len(why) == 0 {
 			why = append(why, "matches your filters")
 		}
-		matches = append(matches, model.Match{Offer: o, Fit: score, Why: why})
+		matches = append(matches, model.Match{Kind: "offer", Offer: o, Fit: score, Why: why})
 	}
 	sort.SliceStable(matches, func(i, j int) bool { return matches[i].Fit > matches[j].Fit })
 	return matches

@@ -1,0 +1,4 @@
+/* Example-profile surface. Tokens and primitives live in base.css. */
+.demo-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.demo-card ul { margin-top: var(--mm-2); }
+.demo-leave { margin-top: var(--mm-5); }

@@ -33,12 +33,17 @@ const resultsHTML = `{{define "results"}}<div class="mm-msg mm mm-summary" id="m
   {{range .Matches}}
   <article class="mm-card">
     <div class="mm-card-head">
-      <span class="mm-mono">{{.Offer.ID}}</span>
-      <span class="mm-badge">{{.Offer.Status}}</span>
+      <span class="mm-mono">{{.Ref}}</span>
+      {{if eq .Kind "crew"}}<span class="mm-badge good">{{.Crew.Size}} Leute</span>{{else}}<span class="mm-badge">{{.Offer.Status}}</span>{{end}}
       <span class="mm-fit">{{.Fit}}%</span>
     </div>
-    <h3>{{.Offer.Title}}</h3>
+    <h3>{{.Title}}</h3>
+    {{if eq .Kind "crew"}}
+    <div class="mm-card-head">{{.Crew.Company}}{{if .Crew.Regions}} · {{index .Crew.Regions 0}}{{end}}{{if .Crew.Rate}} · {{.Crew.Rate}}{{end}}</div>
+    {{if .Crew.AvailableNote}}<div class="mm-muted">{{.Crew.AvailableNote}}</div>{{end}}
+    {{else}}
     <div class="mm-card-head">{{.Offer.Location}} · {{.Offer.Category}} · {{.Offer.Budget}}</div>
+    {{end}}
     <div class="mm-meter"><i style="width: {{.Fit}}%"></i></div>
     <ul class="mm-why">{{range .Why}}<li>{{.}}</li>{{end}}</ul>
   </article>

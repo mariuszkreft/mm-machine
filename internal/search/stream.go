@@ -27,7 +27,7 @@ type briefMatch struct {
 func toBrief(matches []model.Match) []briefMatch {
 	out := make([]briefMatch, 0, len(matches))
 	for _, m := range matches {
-		out = append(out, briefMatch{ID: m.Offer.ID, Title: m.Offer.Title, Fit: m.Fit, Reason: m.Why[0]})
+		out = append(out, briefMatch{ID: m.Ref(), Title: m.Title(), Fit: m.Fit, Reason: m.Why[0]})
 	}
 	return out
 }

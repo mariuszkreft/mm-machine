@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
 )
@@ -54,8 +55,12 @@ func TestHomeUnknownProfile(t *testing.T) {
 	if !strings.Contains(body, `id="mm-input"`) {
 		t.Fatalf("home missing prompt input: %s", body)
 	}
-	if !strings.Contains(body, "Tell me what you need") {
-		t.Fatalf("home missing unknown-profile greeting: %s", body)
+	// German is the default language for the DACH market.
+	if !strings.Contains(body, i18n.T(i18n.DE, "greeting.new")) {
+		t.Fatalf("home missing German unknown-profile greeting: %s", body)
+	}
+	if !strings.Contains(body, `lang="de"`) {
+		t.Fatalf("home not marked as German: %s", body)
 	}
 	if !strings.Contains(body, `id="mm-thread"`) {
 		t.Fatalf("home missing thread: %s", body)
@@ -81,11 +86,42 @@ func TestHomeKnownProfile(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "Welcome back") {
+	if !strings.Contains(body, "Willkommen zurück") {
 		t.Fatalf("home missing known-profile greeting: %s", body)
 	}
-	if !strings.Contains(body, "electrical") {
-		t.Fatalf("home missing profile trade chip: %s", body)
+	// The trade is shown with its German label, not the internal slug.
+	if !strings.Contains(body, i18n.T(i18n.DE, "trade.electrical")) {
+		t.Fatalf("home missing profile trade: %s", body)
+	}
+}
+
+// A visitor whose browser asks for English gets English, and the language
+// switcher is what makes that choice sticky.
+func TestHomeEnglishViaAcceptLanguage(t *testing.T) {
+	mux := newMux(testDeps(t))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Language", "en-GB,en;q=0.9")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, i18n.T(i18n.EN, "greeting.new")) {
+		t.Fatalf("home did not honour Accept-Language: %s", body)
+	}
+	if !strings.Contains(body, `lang="en"`) {
+		t.Fatalf("home not marked as English: %s", body)
+	}
+}
+
+// An explicit cookie beats the browser header.
+func TestLanguageCookieWins(t *testing.T) {
+	mux := newMux(testDeps(t))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Language", "en-GB,en;q=0.9")
+	req.AddCookie(&http.Cookie{Name: i18n.CookieName, Value: "de"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), i18n.T(i18n.DE, "greeting.new")) {
+		t.Fatalf("language cookie ignored")
 	}
 }
 

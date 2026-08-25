@@ -269,7 +269,7 @@ const perspectiveHTML = `{{define "perspective"}}<div id="perspective-panel">
 // grows; an in-flight skeleton reserves the shape of the answer that is
 // coming so nothing jumps when it lands.
 const shellHTML = `{{define "shell"}}<!doctype html>
-<html lang="en">
+<html lang="{{.T.Code}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -286,11 +286,20 @@ const shellHTML = `{{define "shell"}}<!doctype html>
     <header class="mm-top">
       <a class="mm-brand" href="/"><span class="mm-brand-mark">MM</span><span>Montage Manager</span></a>
       <nav aria-label="Primary">
-        <a href="/offers">Pipeline</a>
-        <a href="/about">What it is</a>
-        <a href="/dev">Dev loop</a>
+        <a href="/offers">{{.T.T "nav.pipeline"}}</a>
+        <a href="/demo">{{.T.T "nav.demo"}}</a>
+        <a href="/about">{{.T.T "nav.about"}}</a>
+        <a href="/dev">{{.T.T "nav.dev"}}</a>
+        <a class="mm-lang" href="/lang?to={{if .T.Is "de"}}en{{else}}de{{end}}" rel="nofollow">{{if .T.Is "de"}}EN{{else}}DE{{end}}</a>
       </nav>
     </header>
+
+    {{if .PersonaLabel}}
+    <div class="mm-demo-banner" role="status">
+      <span>{{.PersonaLabel}}</span>
+      <form method="post" action="/demo/leave"><button class="mm-btn quiet" type="submit">{{.T.T "demo.leave"}}</button></form>
+    </div>
+    {{end}}
 
     <section class="mm-ask">
       <h1>{{.Headline}}</h1>
@@ -304,16 +313,17 @@ const shellHTML = `{{define "shell"}}<!doctype html>
             hx-on::after-swap="mmThread.settle()"
             hx-on::after-request="this.reset(); this.querySelector('input').focus()">
         <input id="mm-input" name="message" autocomplete="off" autofocus
-               placeholder="{{.Placeholder}}" aria-label="What do you need?" aria-keyshortcuts="/">
-        <button class="mm-btn" type="submit">Ask</button>
+               placeholder="{{.Placeholder}}" aria-label="{{.Headline}}" aria-keyshortcuts="/">
+        <button class="mm-btn" type="submit">{{.T.T "home.send"}}</button>
       </form>
       <div class="mm-suggest">
+        <span class="mm-muted">{{.T.T "home.tryThis"}}</span>
         {{range .Suggestions}}
         <button class="mm-chip" type="button" hx-post="/ask" hx-target="#mm-thread" hx-swap="beforeend"
                 hx-vals='{"message": "{{.}}"}' hx-indicator="#mm-busy"
                 hx-on::before-request="mmThread.pending()" hx-on::after-swap="mmThread.settle()">{{.}}</button>
         {{end}}
-        <span id="mm-busy" class="htmx-indicator mm-muted" role="status">thinking…</span>
+        <span id="mm-busy" class="htmx-indicator mm-muted" role="status">{{.T.T "home.busy"}}</span>
       </div>
     </section>
   </div>
@@ -326,9 +336,10 @@ const shellHTML = `{{define "shell"}}<!doctype html>
 
   <footer class="mm-foot">
     <span>Montage Manager {{.Version}}</span>
-    <span class="mm-mono">local model: {{.LLMModel}}</span>
-    <a href="/about">what it is</a>
-    <a href="/dev">dev loop</a>
+    <span class="mm-mono">{{.LLMModel}}</span>
+    <a href="/about">{{.T.T "nav.about"}}</a>
+    <a href="/demo">{{.T.T "nav.demo"}}</a>
+    <a href="/dev">{{.T.T "nav.dev"}}</a>
   </footer>
 </div>
 
@@ -374,14 +385,8 @@ const shellHTML = `{{define "shell"}}<!doctype html>
 const greetingHTML = `{{define "greeting"}}<div class="mm-msg mm">
   <span class="mm-who">mm</span>
   {{if .Profile.Known}}
-  <p>Welcome back. I have you as {{.Profile.Role}}{{if .Profile.Trades}} in {{range $i, $t := .Profile.Trades}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}{{if .Profile.Regions}} around {{index .Profile.Regions 0}}{{end}}. Ask for what you need and I will rank it against that.</p>
-  <div class="mm-suggest">
-    <span class="mm-chip on">{{.Profile.Role}}</span>
-    {{range .Profile.Trades}}<span class="mm-chip">{{.}}</span>{{end}}
-    {{range .Profile.Regions}}<span class="mm-chip">{{.}}</span>{{end}}
-    {{if .Profile.CrewSize}}<span class="mm-chip">{{.Profile.CrewSize}} people</span>{{end}}
-  </div>
+  <p>{{printf (.T.T "greeting.known") .ProfileLine}}</p>
   {{else}}
-  <p>Tell me what you need in your own words — a crew, a job, papers you are missing. I will work out the rest and ask only what I cannot infer.</p>
+  <p>{{.T.T "greeting.new"}}</p>
   {{end}}
 </div>{{end}}`

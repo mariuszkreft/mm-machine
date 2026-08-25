@@ -19,6 +19,7 @@ type Memory struct {
 	messages      []model.ChatMessage
 	feedback      []model.Feedback
 	backlog       []model.BacklogItem
+	crews         []model.Crew
 	profiles      map[string]model.Profile
 	searches      []model.SavedSearch
 	nextID        int64

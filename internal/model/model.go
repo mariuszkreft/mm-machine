@@ -199,10 +199,31 @@ type Intent struct {
 
 // Match is one search result with its fit score and the reasons behind it.
 // Every number shown to a user must be explainable, so Why is not optional.
+//
+// A match is either an offer (demand) or a crew (supply); Kind says which, and
+// the unused side stays zero.
 type Match struct {
+	Kind  string // offer | crew
 	Offer Offer
+	Crew  Crew
 	Fit   int      // 0..100
 	Why   []string // short reasons, most important first
+}
+
+// Title is what a result card shows as its heading, whichever side it is.
+func (m Match) Title() string {
+	if m.Kind == "crew" {
+		return m.Crew.Name
+	}
+	return m.Offer.Title
+}
+
+// Ref is the human-facing identifier of the matched record.
+func (m Match) Ref() string {
+	if m.Kind == "crew" {
+		return m.Crew.ID
+	}
+	return m.Offer.ID
 }
 
 // SavedSearch lets a visitor keep an intent they run often.
@@ -212,4 +233,37 @@ type SavedSearch struct {
 	Label     string
 	Query     string
 	CreatedAt time.Time
+}
+
+// --- who can do the work ----------------------------------------------------
+
+// Crew is a deployable team offered by a subcontractor. Offers describe demand;
+// crews describe supply. Search ranks both.
+type Crew struct {
+	ID            string
+	Name          string
+	Company       string
+	Trades        []string
+	Regions       []string
+	Size          int
+	Languages     []string
+	Documents     []string // a1, insurance, certificates, tax
+	AvailableFrom time.Time
+	AvailableNote string // "ab 1. Oktober, 4 Wochen"
+	Rate          string // "48-56 EUR/h"
+	Rating        float64
+	JobsDone      int
+	Note          string
+	UpdatedAt     time.Time
+}
+
+// Persona is a prefilled example identity a visitor can step into, so the app
+// can be understood before anyone types anything real into it.
+type Persona struct {
+	Key        string
+	Label      string
+	Summary    map[string]string // language code -> one-line description
+	Profile    Profile
+	SampleAsks map[string][]string // language code -> example prompts
+	Lang       string
 }
