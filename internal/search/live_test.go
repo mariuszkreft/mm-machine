@@ -13,6 +13,9 @@ import (
 	"mm-machine/internal/store"
 )
 
+// The cluster is shared, so a live check has to allow for it being busy: the
+// point is that the model path works, not that it is fast.
+//
 // TestLive_Run hits the real fleet endpoint and confirms a real sentence
 // parses into a real intent and a ranked, explained result set. It is
 // guarded by testing.Short() so `go test -short` never touches the network.
@@ -23,7 +26,7 @@ func TestLive_Run(t *testing.T) {
 	client := llm.New(llm.Config{MaxTokens: 768})
 	deps := app.Deps{Store: store.NewMemory(), LLM: client}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	raw := "I need an energy crew in Munich from October for three weeks, not Vienna"
@@ -55,7 +58,7 @@ func TestLive_RunGerman(t *testing.T) {
 	client := llm.New(llm.Config{MaxTokens: 768})
 	deps := app.Deps{Store: store.NewMemory(), LLM: client}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	raw := "6 Monteure in München ab Oktober, A1 vorhanden"
