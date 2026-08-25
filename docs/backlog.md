@@ -1,6 +1,6 @@
 # Backlog
 
-- Generated: 2026-08-25T19:26:29Z
+- Generated: 2026-08-25T19:51:38Z
 - Model: deepseek-v4-flash-0731
 
 ## 1. Improve discoverability of pipeline filters on mobile
@@ -13,7 +13,7 @@
 - Status: proposed
 - Feedback ids: 1
 
-Users cannot easily find or understand the pipeline filters on mobile, which may lead to frustration and reduced feature usage.
+Users cannot easily find or understand the pipeline filters on mobile, which may lead to frustration and reduced usage of filtering capabilities.
 
 Evidence:
 > The pipeline filters are not obvious on mobile.

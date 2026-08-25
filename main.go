@@ -8,12 +8,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"mm-machine/internal/app"
 	"mm-machine/internal/assistant"
 	"mm-machine/internal/devloop"
 	"mm-machine/internal/llm"
+	"mm-machine/internal/model"
 	"mm-machine/internal/onboarding"
 	"mm-machine/internal/search"
 	"mm-machine/internal/store"
@@ -53,14 +55,13 @@ func main() {
 		_, _ = w.Write([]byte("ready"))
 	})
 	web.Register(mux, deps)
-	assistant.Register(mux, deps)
 	devloop.Register(mux, deps)
 	onboard := onboarding.Register(mux, deps)
 	finder := search.Register(mux, deps)
+	helper := assistant.Register(mux, deps)
 
-	// /ask is the single entry point behind the prompt. A visitor the app does
-	// not know yet is onboarded; everyone else is searching. Routing lives here
-	// rather than in either package so neither owns the other.
+	// /ask is the single entry point behind the prompt. Routing lives here
+	// rather than in any of the three packages so none of them owns the others.
 	mux.HandleFunc("/ask", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -75,11 +76,14 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if !profile.Known() {
+		switch route(r.FormValue("message"), profile) {
+		case routeAssist:
+			helper.Ask(w, r)
+		case routeOnboard:
 			onboard.Turn(w, r)
-			return
+		default:
+			finder.Query(w, r)
 		}
-		finder.Query(w, r)
 	})
 
 	// The dev loop re-clusters feedback into the backlog on an interval
@@ -112,6 +116,39 @@ func openStore() (store.Store, error) {
 		return store.NewMemory(), nil
 	}
 	return db, nil
+}
+
+// Where a prompt goes. Three destinations, one rule each:
+//   - a visitor the app cannot describe yet is onboarding,
+//   - a question about the product itself belongs to the assistant (which is
+//     also what keeps the feedback loop fed),
+//   - everything else is a search.
+const (
+	routeOnboard = "onboard"
+	routeAssist  = "assist"
+	routeSearch  = "search"
+)
+
+// metaMarkers are phrasings that are about the app rather than about work.
+// Kept deliberately literal: a cheap wrong guess here costs one redirect, an
+// LLM classifier would cost a round-trip on every single prompt.
+var metaMarkers = []string{
+	"how do i", "how does", "how can i", "what is this", "what can i", "what does this",
+	"who are you", "help", "explain", "why do", "why does", "bug", "broken", "not working",
+	"doesn't work", "does not work", "confus", "feedback", "suggest", "you should", "i wish",
+}
+
+func route(message string, profile model.Profile) string {
+	m := strings.ToLower(strings.TrimSpace(message))
+	for _, marker := range metaMarkers {
+		if strings.Contains(m, marker) {
+			return routeAssist
+		}
+	}
+	if !profile.Known() {
+		return routeOnboard
+	}
+	return routeSearch
 }
 
 func env(key, fallback string) string {
