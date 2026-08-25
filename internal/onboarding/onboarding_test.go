@@ -123,7 +123,9 @@ func TestExtractDenseSentenceFillsMultipleFields(t *testing.T) {
 	if len(got.Trades) != 2 || got.Trades[0] != "electrical" || got.Trades[1] != "drywall" {
 		t.Fatalf("trades = %v", got.Trades)
 	}
-	if len(got.Regions) != 1 || got.Regions[0] != "munich, de" {
+	// Place names keep the case the visitor wrote; facet matching is
+	// case-insensitive, so nothing downstream depends on folding them.
+	if len(got.Regions) != 1 || got.Regions[0] != "Munich, DE" {
 		t.Fatalf("regions = %v", got.Regions)
 	}
 	if got.CrewSize != 8 {
@@ -171,7 +173,7 @@ func TestGermanDenseSentenceFillsMultipleFieldsAndCarriesAnswerIn(t *testing.T) 
 	if len(got.Trades) != 2 || got.Trades[0] != "electrical" || got.Trades[1] != "drywall" {
 		t.Fatalf("trades = %v", got.Trades)
 	}
-	if len(got.Regions) != 1 || got.Regions[0] != "münchen, de" {
+	if len(got.Regions) != 1 || got.Regions[0] != "München, DE" {
 		t.Fatalf("regions = %v", got.Regions)
 	}
 	if got.CrewSize != 8 {

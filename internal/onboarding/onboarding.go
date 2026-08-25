@@ -355,7 +355,9 @@ func Extract(ctx context.Context, deps app.Deps, p model.Profile, message string
 		p.Role = got.Role
 	}
 	p.Trades = mergeList(p.Trades, got.Trades)
-	p.Regions = mergeList(p.Regions, got.Regions)
+	// Regions keep the case the visitor used: "München, DE" is a place name,
+	// not a slug, and it is rendered back to them as a chip.
+	p.Regions = mergeNames(p.Regions, got.Regions)
 	p.Languages = mergeList(p.Languages, got.Languages)
 	p.Documents = mergeList(p.Documents, got.Documents)
 	if got.CrewSize > 0 {
@@ -512,6 +514,28 @@ func mechanicalCorrection(p model.Profile, message string) model.Profile {
 		}
 	}
 	return p
+}
+
+// mergeNames merges human-readable values, preserving their case while still
+// de-duplicating case-insensitively.
+func mergeNames(have, add []string) []string {
+	for _, a := range add {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		found := false
+		for _, h := range have {
+			if strings.EqualFold(h, a) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			have = append(have, a)
+		}
+	}
+	return have
 }
 
 func mergeList(have, add []string) []string {
