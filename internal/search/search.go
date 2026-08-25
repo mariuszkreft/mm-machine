@@ -11,12 +11,13 @@ package search
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"html/template"
 	"log"
 	"net/http"
-	"sort"
+	"net/url"
 	"strings"
 	"time"
 
@@ -35,9 +36,12 @@ type Handler struct {
 
 // Register wires the search routes onto mux.
 func Register(mux *http.ServeMux, deps app.Deps) *Handler {
-	h := &Handler{deps: deps, tpl: template.Must(template.New("search").Parse(resultsHTML))}
+	h := &Handler{deps: deps, tpl: parseTemplates()}
 	mux.HandleFunc("/find", h.Query)
 	mux.HandleFunc("/find/save", h.save)
+	mux.HandleFunc("/find/saved", h.saved)
+	mux.HandleFunc("/find/saved/delete", h.deleteSaved)
+	mux.HandleFunc("/find/stream", h.stream)
 	return h
 }
 
@@ -52,12 +56,16 @@ const intentSchema = `{"kind":"find_offers|find_crews|post_job|help","trades":["
 	`"regions":["City"],"statuses":["open"],"keywords":["word"],"documents":["a1"],` +
 	`"crewSize":0,"timeframe":"","budgetHint":"","confidence":0.0}`
 
-// Parse turns raw text into an Intent, using the profile as context for what
-// the visitor probably means.
-func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) model.Intent {
+// Parse turns raw text into an Intent and its facets, using the profile as
+// context for what the visitor probably means. Dates, durations, budget
+// bounds and negations are read from the raw sentence deterministically, on
+// both the model and mechanical paths, so neither needs the other to
+// understand them.
+func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) (model.Intent, facets) {
 	raw = strings.TrimSpace(raw)
+	fc := deriveFacets(raw, time.Now())
 	if deps.LLM == nil {
-		return ParseMechanical(raw)
+		return finishParse(ParseMechanical(raw), fc), fc
 	}
 	var got struct {
 		Kind       string   `json:"kind"`
@@ -75,7 +83,8 @@ func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) mode
 		"Only fill fields the sentence supports; leave the rest empty. " +
 		"trades must come from: " + strings.Join(knownTrades, ", ") + ". " +
 		"statuses must come from: " + strings.Join(knownStatus, ", ") + ". " +
-		"documents must come from: " + strings.Join(knownDocs, ", ") + "."
+		"documents must come from: " + strings.Join(knownDocs, ", ") + ". " +
+		"Ignore anything the sentence explicitly negates (\"not Vienna\") — never put a negated word in trades or regions."
 	if p.Role != "" && p.Role != "unknown" {
 		system += fmt.Sprintf(" The person is a %q; default kind accordingly (owner looks for crews, executor looks for offers).", p.Role)
 	}
@@ -89,7 +98,7 @@ func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) mode
 	}
 	if err := deps.LLM.JSON(ctx, req, intentSchema, &got); err != nil {
 		log.Printf("search: intent parse failed, falling back: %v", err)
-		return ParseMechanical(raw)
+		return finishParse(ParseMechanical(raw), fc), fc
 	}
 	intent := model.Intent{
 		Raw:        raw,
@@ -107,6 +116,15 @@ func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) mode
 	if intent.Kind == "" {
 		intent.Kind = "find_offers"
 	}
+	return finishParse(intent, fc), fc
+}
+
+// finishParse strips anything the sentence explicitly negated out of the
+// positive facet lists, regardless of which path (model or mechanical) put
+// it there.
+func finishParse(intent model.Intent, fc facets) model.Intent {
+	intent.Trades = stripNegated(intent.Trades, fc.ExcludeTrades)
+	intent.Regions = stripNegated(intent.Regions, fc.ExcludeRegions)
 	return intent
 }
 
@@ -157,140 +175,63 @@ func trimAll(in []string) []string {
 	return out
 }
 
-// Rank scores offers against the intent and the profile. Scoring is
-// deterministic and every point is turned into a reason, because a fit number
-// nobody can explain is worse than no number.
-func Rank(offers []model.Offer, intent model.Intent, p model.Profile) []model.Match {
-	matches := make([]model.Match, 0, len(offers))
-	for _, o := range offers {
-		score := 40 // a listed offer already matched the hard filters
-		why := []string{}
-
-		if hasFold(intent.Trades, trade(o)) {
-			score += 20
-			why = append(why, "trade matches "+trade(o))
-		}
-		for _, region := range intent.Regions {
-			if containsFold(region, o.Region) || containsFold(region, o.Location) {
-				score += 15
-				why = append(why, "in "+o.Location)
-				break
-			}
-		}
-		if len(intent.Documents) > 0 && containsAll(o.Requirements, intent.Documents) {
-			score += 10
-			why = append(why, "papers required: "+strings.Join(o.Requirements, ", "))
-		}
-		if intent.CrewSize > 0 && o.CrewSize > 0 {
-			switch {
-			case o.CrewSize >= intent.CrewSize:
-				score += 10
-				why = append(why, fmt.Sprintf("crew of %d covers the %d asked for", o.CrewSize, intent.CrewSize))
-			default:
-				score -= 5
-				why = append(why, fmt.Sprintf("crew of %d is short of %d", o.CrewSize, intent.CrewSize))
-			}
-		}
-		for _, kw := range intent.Keywords {
-			if len(kw) > 3 && containsFold(kw, o.Title+" "+o.Category+" "+o.Supplier) {
-				score += 3
-				why = append(why, "mentions "+kw)
-				break
-			}
-		}
-		if len(p.Regions) > 0 {
-			for _, region := range p.Regions {
-				if containsFold(region, o.Region) || containsFold(region, o.Location) {
-					score += 5
-					why = append(why, "near your region")
-					break
-				}
-			}
-		}
-		if o.Signal == "Attention" {
-			score += 3
-			why = append(why, "needs attention now")
-		}
-
-		if score > 100 {
-			score = 100
-		}
-		if score < 0 {
-			score = 0
-		}
-		if len(why) == 0 {
-			why = append(why, "matches your filters")
-		}
-		matches = append(matches, model.Match{Offer: o, Fit: score, Why: why})
-	}
-	sort.SliceStable(matches, func(i, j int) bool { return matches[i].Fit > matches[j].Fit })
-	return matches
+// Result is the whole answer to one search: what was understood, what
+// matched, and how honest the process had to be about widening to get
+// there.
+type Result struct {
+	Intent  model.Intent
+	Facets  facets
+	Matches []model.Match // full ranked set, not truncated for display
+	Widen   widenInfo
 }
 
-func trade(o model.Offer) string {
-	if strings.TrimSpace(o.Trade) != "" {
-		return o.Trade
-	}
-	return strings.ToLower(o.Category)
-}
-
-func hasFold(list []string, want string) bool {
-	for _, v := range list {
-		if strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(want)) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsFold(needle, haystack string) bool {
-	return strings.Contains(strings.ToLower(haystack), strings.ToLower(strings.TrimSpace(needle)))
-}
-
-func containsAll(have, want []string) bool {
-	for _, w := range want {
-		if !hasFold(have, w) {
-			return false
-		}
-	}
-	return true
-}
-
-// Run is the whole pipeline: parse, query, rank. Exported so the assistant and
-// any future surface can search without going through HTTP.
-func Run(ctx context.Context, deps app.Deps, raw string, p model.Profile) (model.Intent, []model.Match, error) {
-	intent := Parse(ctx, deps, raw, p)
-	filter := store.OfferFilter{
+// Search runs the filter/widen/rank pipeline for an already-parsed intent.
+// Split out from Run so a refine chip can override one facet and re-run
+// this without asking the model to parse the sentence again.
+func Search(ctx context.Context, deps app.Deps, intent model.Intent, fc facets, p model.Profile) (Result, error) {
+	base := store.OfferFilter{
 		Trades:       intent.Trades,
 		Regions:      intent.Regions,
 		Statuses:     intent.Statuses,
 		Requirements: intent.Documents,
 		Limit:        50,
 	}
-	offers, err := deps.Store.ListOffers(ctx, filter)
+	offers, err := deps.Store.ListOffers(ctx, base)
 	if err != nil {
-		return intent, nil, err
+		return Result{}, err
 	}
-	// Widen once rather than showing an empty result: a search that finds
-	// nothing because the parse was too eager is a worse answer than a ranked
-	// list of near misses.
+	offers = applyPostFilter(offers, fc)
+
+	var widen widenInfo
 	if len(offers) == 0 {
-		offers, err = deps.Store.ListOffers(ctx, store.OfferFilter{Limit: 50})
+		offers, widen, err = widenSearch(ctx, deps, base, fc)
 		if err != nil {
-			return intent, nil, err
+			return Result{}, err
 		}
 	}
-	return intent, Rank(offers, intent, p), nil
+	return Result{Intent: intent, Facets: fc, Matches: Rank(offers, intent, fc, p), Widen: widen}, nil
+}
+
+// Run is the whole pipeline: parse, then Search. Exported so the assistant and
+// any future surface can search without going through HTTP.
+func Run(ctx context.Context, deps app.Deps, raw string, p model.Profile) (Result, error) {
+	intent, fc := Parse(ctx, deps, raw, p)
+	return Search(ctx, deps, intent, fc, p)
 }
 
 // --- handlers ---------------------------------------------------------------
 
+const displayLimit = 6
+
 type resultsView struct {
-	Intent   model.Intent
-	Matches  []model.Match
-	Summary  string
-	Query    string
-	Degraded bool
+	Intent    model.Intent
+	Matches   []model.Match
+	Query     string
+	Degraded  bool
+	Widen     widenInfo
+	Chips     []chip
+	StreamURL string
+	Fallback  string
 }
 
 // Query answers a natural-language search and renders the result cards. It is
@@ -305,52 +246,49 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	intent, matches, err := Run(ctx, h.deps, raw, p)
+
+	intent, fc := Parse(ctx, h.deps, raw, p)
+	if rf, ok := parseRefine(r.FormValue("refine")); ok {
+		intent = applyRefine(intent, rf)
+	}
+	result, err := Search(ctx, h.deps, intent, fc, p)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(matches) > 6 {
-		matches = matches[:6]
+
+	display := result.Matches
+	if len(display) > displayLimit {
+		display = display[:displayLimit]
 	}
+	brief := toBrief(display)
+	briefJSON, _ := json.Marshal(brief)
+	streamURL := "/find/stream?" + url.Values{
+		"q":       {raw},
+		"matches": {string(briefJSON)},
+		"trades":  {strings.Join(result.Intent.Trades, ",")},
+		"regions": {strings.Join(result.Intent.Regions, ",")},
+	}.Encode()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<div class="mm-msg you"><span class="mm-who">you</span><p>%s</p></div>`, html.EscapeString(raw))
 	view := resultsView{
-		Intent:   intent,
-		Matches:  matches,
-		Query:    raw,
-		Degraded: intent.Fallback,
-		Summary:  Summarize(intent, matches),
+		Intent:    result.Intent,
+		Matches:   display,
+		Query:     raw,
+		Degraded:  result.Intent.Fallback,
+		Widen:     result.Widen,
+		Chips:     buildChips(result.Matches, result.Intent),
+		StreamURL: streamURL,
+		Fallback:  mechanicalSummary(raw, result.Intent, brief),
 	}
 	if err := h.tpl.ExecuteTemplate(w, "results", view); err != nil {
 		log.Printf("search: render results: %v", err)
 	}
-}
 
-// Summarize writes the one line above the cards. The baseline is mechanical
-// and always truthful; the search worker replaces it with a streamed sentence
-// from the model.
-func Summarize(intent model.Intent, matches []model.Match) string {
-	if len(matches) == 0 {
-		return "Nothing matches that yet."
+	if saved, err := h.deps.Store.ListSavedSearches(ctx, p.ID); err == nil {
+		_ = h.tpl.ExecuteTemplate(w, "saved", savedView{Searches: saved})
 	}
-	parts := []string{fmt.Sprintf("%d match%s", len(matches), plural(len(matches)))}
-	if len(intent.Trades) > 0 {
-		parts = append(parts, "for "+strings.Join(intent.Trades, ", "))
-	}
-	if len(intent.Regions) > 0 {
-		parts = append(parts, "in "+strings.Join(intent.Regions, ", "))
-	}
-	best := matches[0]
-	return strings.Join(parts, " ") + fmt.Sprintf(". Best fit: %s (%d%%) — %s.", best.Offer.Title, best.Fit, best.Why[0])
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "es"
 }
 
 func (h *Handler) save(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +310,7 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	fmt.Fprint(w, `<span class="mm-badge good">saved</span>`)
+	writeBadge(w, "good", "saved")
 }
 
 func firstNonEmpty(vals ...string) string {

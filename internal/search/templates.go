@@ -1,9 +1,33 @@
 package search
 
-const resultsHTML = `{{define "results"}}<div class="mm-msg mm">
+import "html/template"
+
+// parseTemplates builds the one *template.Template every handler executes
+// named templates from.
+func parseTemplates() *template.Template {
+	return template.Must(template.Must(template.New("search").Parse(resultsHTML)).Parse(savedHTML))
+}
+
+const resultsHTML = `{{define "results"}}<div class="mm-msg mm mm-summary" id="mm-summary">
   <span class="mm-who">mm</span>
-  <p>{{.Summary}}</p>
+  <p class="mm-summary-fallback">{{.Fallback}}</p>
+  <p class="mm-summary-live" hx-ext="sse" sse-connect="{{.StreamURL}}" sse-swap="message" sse-close="done" hx-swap="beforeend"></p>
   {{if .Degraded}}<span class="mm-badge warn">matched without the model</span>{{end}}
+  {{if .Widen.Applied}}<span class="mm-badge warn">no exact match — dropped {{.Widen.Dropped}} to find something</span>{{end}}
+  <script>
+  (function () {
+    if (window.__mmSearchWired) return;
+    window.__mmSearchWired = true;
+    document.body.addEventListener('htmx:sseMessage', function (evt) {
+      var msg = evt.target.closest ? evt.target.closest('.mm-summary') : null;
+      if (msg) msg.classList.add('mm-live');
+    });
+    document.body.addEventListener('htmx:afterSwap', function () {
+      var saved = document.querySelectorAll('.mm-saved');
+      for (var i = 0; i < saved.length - 1; i++) saved[i].remove();
+    });
+  })();
+  </script>
 </div>
 <div class="mm-cards" id="mm-results">
   {{range .Matches}}
@@ -22,7 +46,35 @@ const resultsHTML = `{{define "results"}}<div class="mm-msg mm">
   <div class="mm-empty">Nothing matches that yet. Try a different trade, region or timeframe.</div>
   {{end}}
 </div>
+{{if .Chips}}
+<div class="mm-refine" id="mm-refine">
+  {{$q := .Query}}
+  {{range .Chips}}
+  <form class="mm-refine-form" hx-post="/find" hx-target="#mm-thread" hx-swap="beforeend">
+    <input type="hidden" name="q" value="{{$q}}">
+    <input type="hidden" name="refine" value="{{.Refine}}">
+    <button class="mm-chip" type="submit">{{.Label}}</button>
+  </form>
+  {{end}}
+</div>
+{{end}}
 <form class="mm-suggest" hx-post="/find/save" hx-swap="outerHTML">
   <input type="hidden" name="q" value="{{.Query}}">
   <button class="mm-chip" type="submit">save this search</button>
 </form>{{end}}`
+
+const savedHTML = `{{define "saved"}}<div class="mm-saved" id="mm-saved">
+  {{if .Searches}}
+  {{range .Searches}}
+  <span class="mm-saved-item">
+    <form class="mm-saved-run" hx-post="/find" hx-target="#mm-thread" hx-swap="beforeend">
+      <input type="hidden" name="q" value="{{.Query}}">
+      <button class="mm-chip" type="submit">{{.Label}}</button>
+    </form>
+    <form class="mm-saved-del" hx-post="/find/saved/delete" hx-vals='{"id":"{{.ID}}"}' hx-target="closest .mm-saved-item" hx-swap="outerHTML">
+      <button class="mm-btn quiet" type="submit" aria-label="remove saved search">&times;</button>
+    </form>
+  </span>
+  {{end}}
+  {{end}}
+</div>{{end}}`
