@@ -25,7 +25,7 @@ import (
 )
 
 // Version is stamped into the footer and the assistant's context.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 func main() {
 	db, err := openStore()
