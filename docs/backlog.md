@@ -1,6 +1,6 @@
 # Backlog
 
-- Generated: 2026-08-25T18:08:23Z
+- Generated: 2026-08-25T18:12:07Z
 - Model: deepseek-v4-flash-0731
 
 ## 1. Confusion
@@ -11,7 +11,7 @@
 - Effort: M
 - Kind: confusion
 - Status: proposed
-- Feedback ids: 3
+- Feedback ids: 1
 
 Grouped mechanically from 1 piece(s) of user feedback (LLM clustering unavailable).
 
