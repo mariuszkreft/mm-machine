@@ -221,6 +221,122 @@ func TestOffersStatusRejectsUnknown(t *testing.T) {
 	}
 }
 
+// A German visitor must never see the English chrome literals — that is what
+// half-translated pages look like. This checks the home surface, which is the
+// page every visitor lands on first.
+func TestHomeGermanHasNoEnglishMarkers(t *testing.T) {
+	mux := newMux(testDeps(t))
+	rec := do(mux, http.MethodGet, "/", "", false, nil)
+	body := rec.Body.String()
+	markers := []string{
+		i18n.T(i18n.EN, "nav.about"),
+		i18n.T(i18n.EN, "nav.pipeline"),
+		i18n.T(i18n.EN, "nav.dev"),
+		i18n.T(i18n.EN, "home.headline"),
+		i18n.T(i18n.EN, "home.send"),
+	}
+	for _, m := range markers {
+		if strings.Contains(body, m) {
+			t.Errorf("German home leaked English marker %q: %s", m, body)
+		}
+	}
+}
+
+// /about and /offers must render fully in both languages, not just the shell.
+func TestAboutRendersInBothLanguages(t *testing.T) {
+	mux := newMux(testDeps(t))
+
+	de := do(mux, http.MethodGet, "/about", "", false, nil)
+	if !strings.Contains(de.Body.String(), i18n.T(i18n.DE, "about.h1")) {
+		t.Fatalf("German /about missing German headline: %s", de.Body.String())
+	}
+	if !strings.Contains(de.Body.String(), `lang="de"`) {
+		t.Fatalf("German /about not marked as German: %s", de.Body.String())
+	}
+
+	en := do(mux, http.MethodGet, "/about", "", false, &http.Cookie{Name: i18n.CookieName, Value: "en"})
+	if !strings.Contains(en.Body.String(), i18n.T(i18n.EN, "about.h1")) {
+		t.Fatalf("English /about missing English headline: %s", en.Body.String())
+	}
+	if !strings.Contains(en.Body.String(), `lang="en"`) {
+		t.Fatalf("English /about not marked as English: %s", en.Body.String())
+	}
+}
+
+func TestOffersRendersInBothLanguages(t *testing.T) {
+	mux := newMux(testDeps(t))
+
+	de := do(mux, http.MethodGet, "/offers", "", false, nil)
+	if !strings.Contains(de.Body.String(), i18n.T(i18n.DE, "offer.status.open")) {
+		t.Fatalf("German /offers missing German status label: %s", de.Body.String())
+	}
+
+	en := do(mux, http.MethodGet, "/offers", "", false, &http.Cookie{Name: i18n.CookieName, Value: "en"})
+	if !strings.Contains(en.Body.String(), "open") {
+		t.Fatalf("English /offers missing English status label: %s", en.Body.String())
+	}
+}
+
+// The pipeline status names shown on the offer cards and the status buttons
+// must be localized, not the raw internal slug.
+func TestPipelineStatusLabelsAreLocalized(t *testing.T) {
+	mux := newMux(testDeps(t))
+	rec := do(mux, http.MethodGet, "/offers?view=all", "", true, nil)
+	body := rec.Body.String()
+	for _, key := range []string{"offer.status.open", "offer.status.requested", "offer.status.process", "offer.status.done"} {
+		want := i18n.T(i18n.DE, key)
+		if !strings.Contains(body, want) {
+			t.Errorf("pipeline missing German label %q for %s: body head=%.200s", want, key, body)
+		}
+	}
+}
+
+// Offer.Updated is language-blind; the template must go through i18n.Ago
+// instead, which is what actually produces the German time units.
+func TestOfferAgeIsLocalized(t *testing.T) {
+	mux := newMux(testDeps(t))
+	de := do(mux, http.MethodGet, "/offers?view=all", "", true, nil)
+	deBody := de.Body.String()
+	if strings.Contains(deBody, " ago") {
+		t.Fatalf("German pipeline leaked an English relative-time unit: %s", deBody)
+	}
+
+	en := do(mux, http.MethodGet, "/offers?view=all", "", true, &http.Cookie{Name: i18n.CookieName, Value: "en"})
+	enBody := en.Body.String()
+	if !strings.Contains(enBody, "ago") {
+		t.Fatalf("English pipeline missing English relative-time unit: %s", enBody)
+	}
+}
+
+// The language switcher persists through the cookie i18n.Set/Detect define;
+// /lang itself lives in main.go (out of scope for this package), so this
+// exercises the contract it depends on: once the cookie is set, every
+// subsequent request — including a full page other than the one the switch
+// happened on — carries the chosen language.
+func TestLanguageChoicePersistsAcrossPages(t *testing.T) {
+	mux := newMux(testDeps(t))
+	rec := httptest.NewRecorder()
+	i18n.Set(rec, i18n.EN)
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == i18n.CookieName {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("i18n.Set did not write the language cookie")
+	}
+
+	home := do(mux, http.MethodGet, "/", "", false, cookie)
+	if !strings.Contains(home.Body.String(), i18n.T(i18n.EN, "greeting.new")) {
+		t.Fatalf("home did not honour the persisted English cookie: %s", home.Body.String())
+	}
+	about := do(mux, http.MethodGet, "/about", "", false, cookie)
+	if !strings.Contains(about.Body.String(), i18n.T(i18n.EN, "about.h1")) {
+		t.Fatalf("about did not honour the persisted English cookie: %s", about.Body.String())
+	}
+}
+
 // TestNoUnescapedUserInput guards the design contract's escaping rule: no
 // route may echo user- or model-produced text as raw HTML.
 func TestNoUnescapedUserInput(t *testing.T) {

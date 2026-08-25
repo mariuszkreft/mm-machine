@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
 )
@@ -142,6 +143,7 @@ func filterFeedback(items []model.Feedback, f filters) []model.Feedback {
 }
 
 type devView struct {
+	T         i18n.Printer
 	Generated string
 	Model     string
 	Version   string
@@ -154,7 +156,8 @@ type devView struct {
 	Interval  string
 }
 
-func (h *Handler) view(ctx context.Context, f filters) (devView, error) {
+func (h *Handler) view(r *http.Request, f filters) (devView, error) {
+	ctx := r.Context()
 	all, err := h.deps.Store.ListFeedback(ctx, store.FeedbackFilter{})
 	if err != nil {
 		return devView{}, err
@@ -178,6 +181,7 @@ func (h *Handler) view(ctx context.Context, f filters) (devView, error) {
 	}
 
 	return devView{
+		T:         i18n.NewPrinter(r),
 		Generated: time.Now().Format("02 Jan 2006 15:04"),
 		Model:     h.deps.LLMModel,
 		Version:   h.deps.Version,
@@ -192,7 +196,7 @@ func (h *Handler) view(ctx context.Context, f filters) (devView, error) {
 }
 
 func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
-	v, err := h.view(r.Context(), filtersFromRequest(r))
+	v, err := h.view(r, filtersFromRequest(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -203,7 +207,7 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 
 // filter re-renders the workspace body for a kind/status change.
 func (h *Handler) filter(w http.ResponseWriter, r *http.Request) {
-	v, err := h.view(r.Context(), filtersFromRequest(r))
+	v, err := h.view(r, filtersFromRequest(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -220,7 +224,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	v, err := h.view(ctx, f)
+	v, err := h.view(r, f)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -252,7 +256,7 @@ func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), code)
 		return
 	}
-	v, err := h.view(r.Context(), f)
+	v, err := h.view(r, f)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

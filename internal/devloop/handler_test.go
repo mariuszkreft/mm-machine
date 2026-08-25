@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
 )
@@ -112,6 +113,71 @@ func TestDevPage_EscapesFeedback(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;") {
 		t.Errorf("expected escaped script tag in output")
+	}
+}
+
+// /dev is German by default, and the browser lang attribute must say so.
+func TestDevPage_GermanByDefault(t *testing.T) {
+	mux, _ := newTestHandler(t, store.NewMemory())
+	req := httptest.NewRequest(http.MethodGet, "/dev", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `lang="de"`) {
+		t.Fatalf("/dev not marked as German: %s", body)
+	}
+	if !strings.Contains(body, i18n.T(i18n.DE, "dev.title")) {
+		t.Fatalf("/dev missing German title: %s", body)
+	}
+}
+
+// The language cookie must carry through /dev exactly like every other page.
+func TestDevPage_EnglishViaCookie(t *testing.T) {
+	mux, _ := newTestHandler(t, store.NewMemory())
+	req := httptest.NewRequest(http.MethodGet, "/dev", nil)
+	req.AddCookie(&http.Cookie{Name: i18n.CookieName, Value: "en"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `lang="en"`) {
+		t.Fatalf("/dev not marked as English: %s", body)
+	}
+	if !strings.Contains(body, i18n.T(i18n.EN, "dev.title")) {
+		t.Fatalf("/dev missing English title: %s", body)
+	}
+}
+
+// Backlog status and feedback kind are a fixed vocabulary (proposed/accepted/
+// shipped/rejected, bug/confusion/request/praise); the badges and filters
+// must show the localized label, not the raw internal value.
+func TestDevPage_LocalizesBacklogAndFeedbackVocabulary(t *testing.T) {
+	mem := store.NewMemory()
+	seedBacklogItem(t, mem, model.BacklogItem{Title: "Ship the thing", Theme: "thing", Kind: "bug", Status: "accepted"})
+	seedFeedback(t, mem, []model.Feedback{
+		newFeedback("praise", "nice", "this is great", 1),
+	})
+	mux, _ := newTestHandler(t, mem)
+
+	de := httptest.NewRecorder()
+	mux.ServeHTTP(de, httptest.NewRequest(http.MethodGet, "/dev", nil))
+	deBody := de.Body.String()
+	if !strings.Contains(deBody, i18n.T(i18n.DE, "backlog.status.accepted")) {
+		t.Errorf("German /dev missing localized backlog status: %s", deBody)
+	}
+	if !strings.Contains(deBody, i18n.T(i18n.DE, "feedback.kind.praise")) {
+		t.Errorf("German /dev missing localized feedback kind: %s", deBody)
+	}
+
+	enReq := httptest.NewRequest(http.MethodGet, "/dev", nil)
+	enReq.AddCookie(&http.Cookie{Name: i18n.CookieName, Value: "en"})
+	en := httptest.NewRecorder()
+	mux.ServeHTTP(en, enReq)
+	enBody := en.Body.String()
+	if !strings.Contains(enBody, "accepted") {
+		t.Errorf("English /dev missing English backlog status: %s", enBody)
+	}
+	if !strings.Contains(enBody, "praise") {
+		t.Errorf("English /dev missing English feedback kind: %s", enBody)
 	}
 }
 
