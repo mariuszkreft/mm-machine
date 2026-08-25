@@ -71,10 +71,6 @@ func main() {
 }
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 	data := dashboard(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := page.Execute(w, data); err != nil {
