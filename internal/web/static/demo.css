@@ -2,3 +2,5 @@
 .demo-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .demo-card ul { margin-top: var(--mm-2); }
 .demo-leave { margin-top: var(--mm-5); }
+.demo-mechanics { max-width: var(--mm-measure); }
+.demo-sees { margin-top: var(--mm-1); }
