@@ -5,10 +5,11 @@ COPY main.go ./
 COPY static ./static
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mm-machine .
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.20
 WORKDIR /app
 COPY --from=build /out/mm-machine /app/mm-machine
 ENV PORT=8080
 EXPOSE 8080
-USER nonroot:nonroot
+RUN adduser -D -H -u 10001 appuser
+USER appuser
 ENTRYPOINT ["/app/mm-machine"]
