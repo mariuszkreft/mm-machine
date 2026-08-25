@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every catalog key must exist in both languages: a half-translated string is
@@ -64,5 +65,38 @@ func TestAnswerInIsLanguageSpecific(t *testing.T) {
 	}
 	if !strings.Contains(AnswerIn(EN), "English") {
 		t.Fatal("English instruction does not name the language")
+	}
+}
+
+// German dates are day.month.year; English keeps the day-month-year word form.
+// This is the format contract every template must go through instead of
+// formatting a time.Time itself.
+func TestDateIsLocaleSpecific(t *testing.T) {
+	when := time.Date(2026, time.October, 5, 10, 0, 0, 0, time.UTC)
+	if got := Date(DE, when); got != "05.10.2026" {
+		t.Fatalf("Date(DE) = %q, want 05.10.2026", got)
+	}
+	if got := Date(EN, when); got != "5 Oct 2026" {
+		t.Fatalf("Date(EN) = %q, want 5 Oct 2026", got)
+	}
+	if got := Date(DE, time.Time{}); got != "" {
+		t.Fatalf("Date(DE, zero) = %q, want empty", got)
+	}
+}
+
+// The Printer methods are what templates actually call; they must not
+// reintroduce the language-blind formatting they wrap.
+func TestPrinterDateAndAgo(t *testing.T) {
+	when := time.Date(2026, time.October, 5, 10, 0, 0, 0, time.UTC)
+	de := Printer{Lang: DE}
+	if got := de.Date(when); got != "05.10.2026" {
+		t.Fatalf("Printer.Date(DE) = %q, want 05.10.2026", got)
+	}
+	if got := de.Ago(time.Time{}); got != T(DE, "time.justNow") {
+		t.Fatalf("Printer.Ago(DE, zero) = %q, want %q", got, T(DE, "time.justNow"))
+	}
+	en := Printer{Lang: EN}
+	if got := en.Ago(time.Time{}); got != T(EN, "time.justNow") {
+		t.Fatalf("Printer.Ago(EN, zero) = %q, want %q", got, T(EN, "time.justNow"))
 	}
 }

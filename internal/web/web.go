@@ -25,6 +25,7 @@ var staticFS embed.FS
 
 // Dashboard is the view model for the whole page and its partials.
 type Dashboard struct {
+	T            i18n.Printer
 	Now          string
 	View         string
 	Query        string
@@ -361,9 +362,11 @@ func (h *Handler) dashboard(r *http.Request) (Dashboard, error) {
 		}
 	}
 
-	spotlight := h.spotlight(ctx, offers)
+	printer := i18n.NewPrinter(r)
+	spotlight := h.spotlight(ctx, offers, printer)
 
 	return Dashboard{
+		T:            printer,
 		Now:          time.Now().Format("02 Jan 2006 15:04"),
 		View:         view,
 		Query:        query,
@@ -382,13 +385,16 @@ func (h *Handler) dashboard(r *http.Request) (Dashboard, error) {
 }
 
 // spotlight prefers the most urgent offer, falling back to any offer at all.
-func (h *Handler) spotlight(ctx context.Context, filtered []model.Offer) model.Offer {
+func (h *Handler) spotlight(ctx context.Context, filtered []model.Offer, printer i18n.Printer) model.Offer {
 	all, err := h.deps.Store.ListOffers(ctx, store.OfferFilter{})
 	if err != nil || len(all) == 0 {
 		if len(filtered) > 0 {
 			return filtered[0]
 		}
-		return model.Offer{Title: "No offers yet", Attention: "Create the first offer in the pipeline."}
+		return model.Offer{
+			Title:     printer.T("about.spotlightNoneTitle"),
+			Attention: printer.T("about.spotlightNoneAttention"),
+		}
 	}
 	for _, o := range all {
 		if o.Signal == "Attention" {
