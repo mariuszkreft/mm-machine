@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 )
 
@@ -29,7 +30,7 @@ func fixedIntent() model.Intent {
 }
 
 func TestRankOrderLocked(t *testing.T) {
-	matches := Rank(fixedCorpus(), fixedIntent(), facets{}, model.Profile{})
+	matches := Rank(fixedCorpus(), fixedIntent(), facets{}, model.Profile{}, nil, i18n.EN)
 	got := make([]string, len(matches))
 	for i, m := range matches {
 		got[i] = m.Offer.ID
@@ -43,7 +44,7 @@ func TestRankOrderLocked(t *testing.T) {
 }
 
 func TestRankEveryMatchHasAReason(t *testing.T) {
-	matches := Rank(fixedCorpus(), fixedIntent(), facets{}, model.Profile{})
+	matches := Rank(fixedCorpus(), fixedIntent(), facets{}, model.Profile{}, nil, i18n.EN)
 	for _, m := range matches {
 		if len(m.Why) == 0 {
 			t.Errorf("offer %s has no reason", m.Offer.ID)
@@ -67,7 +68,7 @@ func TestRankBudgetAndWindowBoosts(t *testing.T) {
 		Start:     time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 		End:       time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC),
 	}
-	matches := Rank(offers, model.Intent{}, fc, model.Profile{})
+	matches := Rank(offers, model.Intent{}, fc, model.Profile{}, nil, i18n.EN)
 	byID := map[string]model.Match{}
 	for _, m := range matches {
 		byID[m.Offer.ID] = m
@@ -79,10 +80,10 @@ func TestRankBudgetAndWindowBoosts(t *testing.T) {
 
 func TestRankProfileBoosts(t *testing.T) {
 	offer := model.Offer{ID: "MM-1", Trade: "steel", Region: "Rotterdam, NL", CrewSize: 10, Requirements: []string{"a1", "insurance"}}
-	base := Rank([]model.Offer{offer}, model.Intent{}, facets{}, model.Profile{})[0].Fit
+	base := Rank([]model.Offer{offer}, model.Intent{}, facets{}, model.Profile{}, nil, i18n.EN)[0].Fit
 
 	p := model.Profile{Trades: []string{"steel"}, Regions: []string{"Rotterdam"}, CrewSize: 4, Documents: []string{"a1", "insurance"}}
-	boosted := Rank([]model.Offer{offer}, model.Intent{}, facets{}, p)[0].Fit
+	boosted := Rank([]model.Offer{offer}, model.Intent{}, facets{}, p, nil, i18n.EN)[0].Fit
 
 	if boosted <= base {
 		t.Errorf("profile-matching offer should score higher: base=%d boosted=%d", base, boosted)

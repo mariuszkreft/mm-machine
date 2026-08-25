@@ -4,48 +4,52 @@ import (
 	"context"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
 )
 
 // widenInfo records what widening did, so the surface can say so instead of
 // quietly showing an unrelated list. The baseline widened silently; this
-// makes it honest.
+// makes it honest. Dropped is already localized to the search that produced
+// it (see dropStep.key / localCatalog's "search.widen.*" entries).
 type widenInfo struct {
 	Applied bool
-	Dropped string // human label of what was dropped to find something
+	Dropped string // human label, in the visitor's language, of what was dropped to find something
 }
 
 // dropStep is one candidate facet to drop while widening, tried in order
 // from least to most central to the ask. Negations are never dropped: a
-// visitor who said "not Vienna" meant it, even with nothing else to show.
+// visitor who said "not Vienna"/"nicht Wien" meant it, even with nothing
+// else to show. key looks up the localized label in localCatalog under
+// "search.widen.<key>".
 type dropStep struct {
-	label string
+	key   string
 	apply func(store.OfferFilter, facets) (store.OfferFilter, facets)
 }
 
 var dropOrder = []dropStep{
-	{"the timeframe", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
+	{"timeframe", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
 		f.HasWindow = false
 		return b, f
 	}},
-	{"the budget", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
+	{"budget", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
 		f.HasBudgetMin, f.HasBudgetMax = false, false
 		return b, f
 	}},
-	{"the document requirements", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
+	{"documents", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
 		b.Requirements = nil
 		return b, f
 	}},
-	{"the status filter", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
+	{"status", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
 		b.Statuses = nil
 		return b, f
 	}},
-	{"the region", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
+	{"region", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
 		b.Regions = nil
 		return b, f
 	}},
-	{"the trade", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
+	{"trade", func(b store.OfferFilter, f facets) (store.OfferFilter, facets) {
 		b.Trades = nil
 		return b, f
 	}},
@@ -53,9 +57,9 @@ var dropOrder = []dropStep{
 
 // widenSearch runs when the exact filter finds nothing. It drops one facet
 // at a time, in dropOrder, until something matches, and reports which one
-// mattered. If nothing individually helps, it falls back to everything
-// (still honoring exclusions) rather than showing a dead end.
-func widenSearch(ctx context.Context, deps app.Deps, base store.OfferFilter, fc facets) ([]model.Offer, widenInfo, error) {
+// mattered, in lang. If nothing individually helps, it falls back to
+// everything (still honoring exclusions) rather than showing a dead end.
+func widenSearch(ctx context.Context, deps app.Deps, base store.OfferFilter, fc facets, lang i18n.Lang) ([]model.Offer, widenInfo, error) {
 	for _, step := range dropOrder {
 		b2, f2 := step.apply(base, fc)
 		offers, err := deps.Store.ListOffers(ctx, b2)
@@ -64,7 +68,7 @@ func widenSearch(ctx context.Context, deps app.Deps, base store.OfferFilter, fc 
 		}
 		offers = applyPostFilter(offers, f2)
 		if len(offers) > 0 {
-			return offers, widenInfo{Applied: true, Dropped: step.label}, nil
+			return offers, widenInfo{Applied: true, Dropped: tr(lang, "search.widen."+step.key)}, nil
 		}
 	}
 	fallback := facets{ExcludeTrades: fc.ExcludeTrades, ExcludeRegions: fc.ExcludeRegions}
@@ -73,5 +77,5 @@ func widenSearch(ctx context.Context, deps app.Deps, base store.OfferFilter, fc 
 		return nil, widenInfo{}, err
 	}
 	offers = applyPostFilter(offers, fallback)
-	return offers, widenInfo{Applied: true, Dropped: "every filter"}, nil
+	return offers, widenInfo{Applied: true, Dropped: tr(lang, "search.widen.everything")}, nil
 }

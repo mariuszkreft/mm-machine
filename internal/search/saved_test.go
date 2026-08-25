@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/onboarding"
 )
@@ -32,7 +33,9 @@ func TestSavedSearchRoundTrip(t *testing.T) {
 	save.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, save)
-	if !strings.Contains(rec.Body.String(), "saved") {
+	// No Accept-Language header, so this lands on the app's own default
+	// (German — see i18n.Default): the confirmation badge follows suit.
+	if !strings.Contains(rec.Body.String(), i18n.T(i18n.Default, "search.saved")) {
 		t.Fatalf("expected a saved confirmation, got %q", rec.Body.String())
 	}
 
