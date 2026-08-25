@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
@@ -78,6 +79,7 @@ func doForm(mux *http.ServeMux, method, path string, form url.Values) *httptest.
 func TestPanelRenders(t *testing.T) {
 	_, mux, _ := newTestHandler(t, &fakeLLM{})
 	req := httptest.NewRequest(http.MethodGet, "/assistant/panel?role=owner&route=%2F", nil)
+	req.AddCookie(&http.Cookie{Name: i18n.CookieName, Value: "en"})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -355,5 +357,98 @@ func TestExtractDeduplicatesAgainstRecentFeedback(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected duplicate feedback to be skipped, got %+v", got)
+	}
+}
+
+// --- required: German feedback extraction stores a German verbatim ----------
+
+func TestGermanFeedbackExtractionStoresGermanVerbatim(t *testing.T) {
+	germanVerbatim := "der Upload-Knopf tut gar nichts"
+	fake := &fakeLLM{JSONFunc: func(ctx context.Context, req llm.Request, schemaHint string, out any) error {
+		if !strings.Contains(req.Messages[0].Content, "German") {
+			t.Fatalf("expected the extraction prompt to call out German transcripts, got: %s", req.Messages[0].Content)
+		}
+		return json.Unmarshal([]byte(`[{"kind":"bug","theme":"upload-fails","severity":4,"verbatim":"`+germanVerbatim+`","requested":"den Upload-Knopf reparieren"}]`), out)
+	}}
+	db := store.NewMemory()
+	deps := app.Deps{Store: db, LLM: fake, Version: "test-1", LLMModel: "fake-model"}
+	ctx := context.Background()
+
+	if _, err := db.CreateConversation(ctx, model.Conversation{ID: "conv-de", Role: "owner", Route: "/", CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := db.AppendMessage(ctx, model.ChatMessage{ConversationID: "conv-de", Role: "user", Content: germanVerbatim}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	got, err := Extract(ctx, deps, "conv-de")
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(got) != 1 || got[0].Verbatim != germanVerbatim {
+		t.Fatalf("expected the German verbatim to be stored unchanged, got %+v", got)
+	}
+
+	stored, err := db.ListFeedback(ctx, store.FeedbackFilter{})
+	if err != nil {
+		t.Fatalf("ListFeedback: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Verbatim != germanVerbatim {
+		t.Fatalf("expected 1 stored German feedback record, got %+v", stored)
+	}
+}
+
+// --- required: AnswerIn reaches the model request ----------------------------
+
+func TestAnswerInReachesTheModelRequest(t *testing.T) {
+	var captured llm.Request
+	fake := &fakeLLM{ChatFunc: func(ctx context.Context, req llm.Request) (llm.Response, error) {
+		captured = req
+		return llm.Response{Content: "Verstanden.", FinishReason: "stop"}, nil
+	}}
+	_, mux, _ := newTestHandler(t, fake)
+
+	req := httptest.NewRequest(http.MethodPost, "/assistant/message", strings.NewReader(url.Values{
+		"conversation": {"conv-lang"},
+		"role":         {"owner"},
+		"route":        {"/"},
+		"message":      {"was kann ich hier machen?"},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: i18n.CookieName, Value: "de"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(captured.Messages) == 0 || captured.Messages[0].Role != "system" {
+		t.Fatalf("expected a leading system message, got: %+v", captured.Messages)
+	}
+	if !strings.Contains(captured.Messages[0].Content, i18n.AnswerIn(i18n.DE)) {
+		t.Fatalf("expected i18n.AnswerIn(de) in the system prompt, got: %s", captured.Messages[0].Content)
+	}
+}
+
+// --- SystemPrompt describes the app to itself --------------------------------
+
+func TestSystemPromptIncludesCorpusPersonasAndLanguage(t *testing.T) {
+	db := store.NewMemory()
+	deps := app.Deps{Store: db, Version: "test-1", LLMModel: "fake-model"}
+	ctx := context.Background()
+
+	prompt := SystemPrompt(ctx, deps, "owner", "/", "", i18n.DE)
+
+	if !strings.Contains(prompt, "München") {
+		t.Fatalf("expected an example persona (Munich GU) in the system prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "offers") || !strings.Contains(prompt, "crews") {
+		t.Fatalf("expected the corpus size (offers/crews) in the system prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "/dev") {
+		t.Fatalf("expected the feedback loop to mention the /dev backlog, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, i18n.AnswerIn(i18n.DE)) {
+		t.Fatalf("expected i18n.AnswerIn(de) at the end of the system prompt, got: %s", prompt)
 	}
 }

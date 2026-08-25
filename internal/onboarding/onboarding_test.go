@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
@@ -86,6 +88,13 @@ func profileCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	return nil
 }
 
+// langCookie pins the request to a language, overriding the DE default so
+// tests that assert on specific English or German copy don't depend on
+// Accept-Language guesswork.
+func langCookie(l i18n.Lang) *http.Cookie {
+	return &http.Cookie{Name: i18n.CookieName, Value: string(l)}
+}
+
 // --- 1. dense-sentence extraction fills multiple fields ---------------------
 
 func TestExtractDenseSentenceFillsMultipleFields(t *testing.T) {
@@ -106,7 +115,7 @@ func TestExtractDenseSentenceFillsMultipleFields(t *testing.T) {
 
 	p := model.Profile{ID: "p1", Role: "unknown"}
 	got := Extract(context.Background(), deps, p,
-		"we're 8 guys doing electrical and drywall around Munich, A1 and insurance done, free from October")
+		"we're 8 guys doing electrical and drywall around Munich, A1 and insurance done, free from October", i18n.EN)
 
 	if got.Role != "executor" {
 		t.Fatalf("role = %q, want executor", got.Role)
@@ -129,8 +138,76 @@ func TestExtractDenseSentenceFillsMultipleFields(t *testing.T) {
 
 	// One sentence should be enough: every field the sentence supported is
 	// now known, so there is nothing left to ask.
-	if _, done := NextQuestion(got); !done {
+	if _, done := NextQuestion(got, i18n.EN); !done {
 		t.Fatalf("expected onboarding done once every field is filled from one sentence: %+v", got)
+	}
+}
+
+// --- required: German dense sentence fills multiple fields, and carries
+// AnswerIn to the model -------------------------------------------------------
+
+func TestGermanDenseSentenceFillsMultipleFieldsAndCarriesAnswerIn(t *testing.T) {
+	var captured llm.Request
+	fake := &fakeLLM{JSONFunc: func(ctx context.Context, req llm.Request, schemaHint string, out any) error {
+		captured = req
+		return json.Unmarshal([]byte(`{
+			"role": "executor",
+			"trades": ["electrical", "drywall"],
+			"regions": ["München, DE"],
+			"crewSize": 8,
+			"documents": ["a1", "insurance"],
+			"availability": "ab Oktober"
+		}`), out)
+	}}
+	deps := app.Deps{LLM: fake}
+
+	p := model.Profile{ID: "p1", Role: "unknown"}
+	got := Extract(context.Background(), deps, p,
+		"wir sind 8 Leute, Elektro und Trockenbau, Raum München, A1 und Versicherung liegen vor, ab Oktober frei", i18n.DE)
+
+	if got.Role != "executor" {
+		t.Fatalf("role = %q, want executor", got.Role)
+	}
+	if len(got.Trades) != 2 || got.Trades[0] != "electrical" || got.Trades[1] != "drywall" {
+		t.Fatalf("trades = %v", got.Trades)
+	}
+	if len(got.Regions) != 1 || got.Regions[0] != "münchen, de" {
+		t.Fatalf("regions = %v", got.Regions)
+	}
+	if got.CrewSize != 8 {
+		t.Fatalf("crewSize = %d, want 8", got.CrewSize)
+	}
+	if len(got.Documents) != 2 {
+		t.Fatalf("documents = %v", got.Documents)
+	}
+	if strings.TrimSpace(got.Availability) == "" {
+		t.Fatalf("availability empty")
+	}
+
+	if len(captured.Messages) == 0 || !strings.Contains(captured.Messages[0].Content, i18n.AnswerIn(i18n.DE)) {
+		t.Fatalf("expected i18n.AnswerIn(de) in the leading system message, got: %+v", captured.Messages)
+	}
+
+	if _, done := NextQuestion(got, i18n.DE); !done {
+		t.Fatalf("expected onboarding done once every field is filled from one German sentence: %+v", got)
+	}
+}
+
+// --- required: the keyword fallback must work in German too -----------------
+
+func TestMechanicalFallbackWorksInGerman(t *testing.T) {
+	deps := app.Deps{LLM: nil}
+	p := model.Profile{ID: "p1", Role: "unknown"}
+	got := Extract(context.Background(), deps, p,
+		"wir bieten Elektro und Trockenbau an, A1 und Versicherung liegen vor", i18n.DE)
+	if got.Role != "executor" {
+		t.Fatalf("mechanical role = %q, want executor", got.Role)
+	}
+	if len(got.Trades) != 2 {
+		t.Fatalf("mechanical trades = %v", got.Trades)
+	}
+	if len(got.Documents) != 2 {
+		t.Fatalf("mechanical documents = %v", got.Documents)
 	}
 }
 
@@ -146,10 +223,11 @@ func TestTurnFillsProfileFromOneMessageAndSetsCookieOnce(t *testing.T) {
 		}`), out)
 	}}
 	_, mux, db := newTestHandler(fake)
+	en := langCookie(i18n.EN)
 
 	first := doForm(mux, http.MethodPost, "/start/turn", url.Values{
 		"message": {"we're 8 guys doing electrical and drywall around Munich, A1 and insurance done, free from October"},
-	})
+	}, en)
 	if first.Code != http.StatusOK {
 		t.Fatalf("turn status = %d, body=%s", first.Code, first.Body.String())
 	}
@@ -160,13 +238,14 @@ func TestTurnFillsProfileFromOneMessageAndSetsCookieOnce(t *testing.T) {
 
 	// A second turn, replaying the cookie, must not set it again (reused, not
 	// re-issued) and must build on the same profile.
-	second := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {"hello again"}}, cookie)
+	second := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {"hello again"}}, cookie, en)
 	if c := profileCookie(second); c != nil {
 		t.Fatalf("cookie was re-set on a request that already carried it: %+v", c)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/start/profile", nil)
 	req.AddCookie(cookie)
+	req.AddCookie(en)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	body := rec.Body.String()
@@ -224,7 +303,7 @@ func TestExtractCorrectionFunctionRemovesAndReplacesDirectly(t *testing.T) {
 	deps := app.Deps{LLM: fake}
 	p := model.Profile{ID: "p1", Role: "executor", Trades: []string{"electrical", "drywall"}}
 
-	got := ExtractCorrection(context.Background(), deps, p, "no, we do sanitary, not electrical")
+	got := ExtractCorrection(context.Background(), deps, p, "no, we do sanitary, not electrical", i18n.EN)
 
 	want := map[string]bool{"drywall": true, "sanitary": true}
 	if len(got.Trades) != 2 {
@@ -242,12 +321,46 @@ func TestExtractCorrectionFunctionRemovesAndReplacesDirectly(t *testing.T) {
 	}
 }
 
+// --- required: German correction replaces a value ----------------------------
+
+func TestGermanCorrectionReplacesAValue(t *testing.T) {
+	if !isCorrection("nein, wir machen Sanitär, nicht Elektro") {
+		t.Fatalf("expected German correction cues to be detected")
+	}
+
+	fake := &fakeLLM{JSONFunc: func(ctx context.Context, req llm.Request, schemaHint string, out any) error {
+		if !strings.Contains(req.Messages[0].Content, i18n.AnswerIn(i18n.DE)) {
+			t.Fatalf("expected i18n.AnswerIn(de) in the correction system message, got: %s", req.Messages[0].Content)
+		}
+		return json.Unmarshal([]byte(`{"remove":{"trades":["electrical"]},"add":{"trades":["sanitary"]}}`), out)
+	}}
+	deps := app.Deps{LLM: fake}
+	p := model.Profile{ID: "p1", Role: "executor", Trades: []string{"electrical", "drywall"}}
+
+	got := ExtractCorrection(context.Background(), deps, p, "nein, wir machen Sanitär, nicht Elektro", i18n.DE)
+
+	want := map[string]bool{"drywall": true, "sanitary": true}
+	if len(got.Trades) != 2 {
+		t.Fatalf("trades = %v, want 2 entries", got.Trades)
+	}
+	for _, tr := range got.Trades {
+		if !want[tr] {
+			t.Fatalf("unexpected trade %q survived correction: %v", tr, got.Trades)
+		}
+		if tr == "electrical" {
+			t.Fatalf("electrical should have been removed, got %v", got.Trades)
+		}
+	}
+}
+
 func TestIsCorrectionDetectsCorrectionLanguage(t *testing.T) {
 	cases := map[string]bool{
 		"no, we do sanitary, not electrical": true,
 		"actually it's Berlin not Munich":    true,
 		"we also do hvac":                    false,
 		"we're 8 guys doing electrical":      false,
+		"nein, das ist falsch":               true,
+		"wir machen auch Sanitär":            false,
 	}
 	for msg, want := range cases {
 		if got := isCorrection(msg); got != want {
@@ -267,13 +380,13 @@ func TestNextQuestionNeverRepeatsAKnownField(t *testing.T) {
 		Documents:    []string{"a1"},
 		Availability: "from October",
 	}
-	q, done := NextQuestion(p)
+	q, done := NextQuestion(p, i18n.EN)
 	if !done {
 		t.Fatalf("expected done once every field is filled, got question %q", q)
 	}
 
 	p.Availability = ""
-	q, done = NextQuestion(p)
+	q, done = NextQuestion(p, i18n.EN)
 	if done || !strings.Contains(strings.ToLower(q), "when") {
 		t.Fatalf("expected only the availability question, got done=%v q=%q", done, q)
 	}
@@ -288,22 +401,74 @@ func TestNextQuestionNeverRepeatsAKnownField(t *testing.T) {
 	}
 }
 
+// --- required: questions render in the request's language -------------------
+
+func TestQuestionsRenderInRequestLanguage(t *testing.T) {
+	_, mux, _ := newTestHandler(&fakeLLM{})
+
+	de := doForm(mux, http.MethodGet, "/start/turn", url.Values{})
+	if !strings.Contains(de.Body.String(), i18n.T(i18n.DE, "onboarding.role")) {
+		t.Fatalf("expected the German question by default, got: %s", de.Body.String())
+	}
+	if !strings.Contains(de.Body.String(), i18n.T(i18n.DE, "onboarding.why")) {
+		t.Fatalf("expected the German why-preamble before the first question, got: %s", de.Body.String())
+	}
+
+	en := doForm(mux, http.MethodGet, "/start/turn", url.Values{}, langCookie(i18n.EN))
+	if !strings.Contains(en.Body.String(), i18n.T(i18n.EN, "onboarding.role")) {
+		t.Fatalf("expected the English question with an explicit en cookie, got: %s", en.Body.String())
+	}
+}
+
 func TestNextQuestionOffersFinishAfterTwoSkippedTurns(t *testing.T) {
 	fake := &fakeLLM{JSONFunc: func(ctx context.Context, req llm.Request, schemaHint string, out any) error {
 		// Never extracts anything new, however earnestly the visitor answers.
 		return json.Unmarshal([]byte(`{}`), out)
 	}}
 	_, mux, _ := newTestHandler(fake)
+	en := langCookie(i18n.EN)
+	nudgeButton := html.EscapeString(lt(i18n.EN, "nudge.button"))
 
-	first := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {"hard to say really"}})
-	cookie := profileCookie(first)
-	if strings.Contains(first.Body.String(), "that's enough") {
+	first := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {"hard to say really"}}, en)
+	if strings.Contains(first.Body.String(), nudgeButton) {
 		t.Fatalf("should not offer to finish after only one skipped turn: %s", first.Body.String())
 	}
+	cookie := profileCookie(first)
 
-	second := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {"not sure honestly"}}, cookie)
-	if !strings.Contains(second.Body.String(), "that's enough") {
+	second := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {"not sure honestly"}}, cookie, en)
+	if !strings.Contains(second.Body.String(), nudgeButton) {
 		t.Fatalf("expected an offer to finish after two skipped turns: %s", second.Body.String())
+	}
+}
+
+// --- required: skipping onboarding still leaves a usable profile ------------
+
+func TestSkippingOnboardingLeavesUsableProfile(t *testing.T) {
+	_, mux, db := newTestHandler(&fakeLLM{})
+
+	first := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {""}})
+	cookie := profileCookie(first)
+	if cookie == nil {
+		t.Fatalf("expected a profile cookie even before answering anything")
+	}
+	if !strings.Contains(first.Body.String(), i18n.T(i18n.DE, "onboarding.why")) {
+		t.Fatalf("expected the why-preamble on the very first turn: %s", first.Body.String())
+	}
+
+	rec := doForm(mux, http.MethodPost, "/start/finish", url.Values{}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("finish status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "%!s") || strings.Contains(rec.Body.String(), "<nil>") {
+		t.Fatalf("finish rendered a broken summary for an empty profile: %s", rec.Body.String())
+	}
+
+	p, err := db.GetProfile(context.Background(), cookie.Value)
+	if err != nil {
+		t.Fatalf("profile must still be usable after skipping onboarding: %v", err)
+	}
+	if p.ID == "" {
+		t.Fatalf("expected a persisted, retrievable profile, got %+v", p)
 	}
 }
 
@@ -397,6 +562,22 @@ func TestHTMLEscapingOfVisitorInput(t *testing.T) {
 	}
 }
 
+// German visitor input must be escaped exactly like English input — the
+// escaping path does not branch on language.
+func TestHTMLEscapingOfGermanVisitorInput(t *testing.T) {
+	_, mux, _ := newTestHandler(&fakeLLM{})
+
+	message := `<img src=x onerror=alert(1)> wir bieten Elektro an`
+	rec := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {message}}, langCookie(i18n.DE))
+	body := rec.Body.String()
+	if strings.Contains(body, "<img") {
+		t.Fatalf("German visitor message was not escaped: %s", body)
+	}
+	if !strings.Contains(body, "&lt;img") {
+		t.Fatalf("expected the escaped echo of the German message: %s", body)
+	}
+}
+
 func TestProfileEditEscapesInput(t *testing.T) {
 	_, mux, _ := newTestHandler(&fakeLLM{})
 	first := doForm(mux, http.MethodPost, "/start/turn", url.Values{"message": {""}})
@@ -443,7 +624,7 @@ func TestApplyEditRemovesAndSets(t *testing.T) {
 func TestMechanicalFallbackWhenLLMUnavailable(t *testing.T) {
 	deps := app.Deps{LLM: nil}
 	p := model.Profile{ID: "p1", Role: "unknown"}
-	got := Extract(context.Background(), deps, p, "we offer electrical and drywall work, A1 and insurance ready")
+	got := Extract(context.Background(), deps, p, "we offer electrical and drywall work, A1 and insurance ready", i18n.EN)
 	if got.Role != "executor" {
 		t.Fatalf("mechanical role = %q", got.Role)
 	}
@@ -455,7 +636,7 @@ func TestMechanicalFallbackWhenLLMUnavailable(t *testing.T) {
 	}
 }
 
-// --- live cluster smoke test (guarded, not run in -short) ---------------------
+// --- live cluster smoke tests (guarded, not run in -short) --------------------
 
 func TestLiveExtraction(t *testing.T) {
 	if testing.Short() {
@@ -474,9 +655,37 @@ func TestLiveExtraction(t *testing.T) {
 		t.Skipf("live cluster unreachable: %v", err)
 	}
 	p := model.Profile{ID: "live", Role: "unknown"}
-	got := Extract(ctx, deps, p, "we're 8 guys doing electrical and drywall around Munich, A1 and insurance done, free from October")
+	got := Extract(ctx, deps, p, "we're 8 guys doing electrical and drywall around Munich, A1 and insurance done, free from October", i18n.EN)
 	t.Logf("live extraction result: %+v", got)
 	if got.Role != "owner" && got.Role != "executor" {
 		t.Fatalf("live model did not infer a role: %+v", got)
+	}
+}
+
+func TestLiveExtractionGerman(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live-cluster test in -short mode")
+	}
+	client := llm.New(llm.Config{
+		BaseURL:   "http://192.168.31.90:8000/v1",
+		Model:     "deepseek-v4-flash-0731",
+		APIKey:    "local",
+		MaxTokens: 1024,
+	})
+	deps := app.Deps{LLM: client}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := client.Health(ctx); err != nil {
+		t.Skipf("live cluster unreachable: %v", err)
+	}
+	p := model.Profile{ID: "live-de", Role: "unknown"}
+	got := Extract(ctx, deps, p,
+		"wir sind 8 Leute, Elektro und Trockenbau, Raum München, A1 und Versicherung liegen vor, ab Oktober frei", i18n.DE)
+	t.Logf("live German extraction result: %+v", got)
+	if got.Role != "owner" && got.Role != "executor" {
+		t.Fatalf("live model did not infer a role from German: %+v", got)
+	}
+	if len(got.Trades) == 0 {
+		t.Fatalf("live model did not infer any trade from German: %+v", got)
 	}
 }
