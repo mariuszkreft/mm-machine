@@ -2,22 +2,22 @@ package search
 
 import (
 	"context"
-	"fmt"
+	"math"
 	"sort"
 	"strings"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
 )
 
-// RankCrews scores the supply side against an intent, mirroring RankOffers.
+// RankCrews scores the supply side against an intent, mirroring Rank for
+// offers: the same facets/profile/text-relevance blend, the same "every
+// point earns a Why line" rule, in the visitor's own language.
 // A Generalunternehmer asking "who can field six electricians in Munich in
 // October" is answered from here.
-//
-// Baseline weights; the search worker owns the tuning, but the rule holds:
-// every point added must also add a line to Why.
-func RankCrews(crews []model.Crew, intent model.Intent, p model.Profile) []model.Match {
+func RankCrews(crews []model.Crew, intent model.Intent, p model.Profile, textScores map[string]float64, lang i18n.Lang) []model.Match {
 	matches := make([]model.Match, 0, len(crews))
 	for _, c := range crews {
 		score := 40
@@ -26,37 +26,43 @@ func RankCrews(crews []model.Crew, intent model.Intent, p model.Profile) []model
 		for _, trade := range intent.Trades {
 			if containsFold(trade, strings.Join(c.Trades, " ")) {
 				score += 20
-				why = append(why, "Gewerk passt: "+trade)
+				why = append(why, tr(lang, "search.why.trade", i18n.T(lang, "trade."+trade)))
 				break
 			}
 		}
 		for _, region := range intent.Regions {
 			if containsFold(region, strings.Join(c.Regions, " ")) {
 				score += 15
-				why = append(why, "arbeitet in "+region)
+				why = append(why, tr(lang, "search.why.crewRegion", region))
 				break
 			}
 		}
 		if intent.CrewSize > 0 {
 			if c.Size >= intent.CrewSize {
 				score += 12
-				why = append(why, fmt.Sprintf("%d Leute decken die gesuchten %d", c.Size, intent.CrewSize))
+				why = append(why, tr(lang, "search.why.crewFits", c.Size, intent.CrewSize))
 			} else {
 				score -= 8
-				why = append(why, fmt.Sprintf("nur %d Leute statt %d", c.Size, intent.CrewSize))
+				why = append(why, tr(lang, "search.why.crewShort", c.Size, intent.CrewSize))
 			}
 		}
 		if len(intent.Documents) > 0 && containsAll(c.Documents, intent.Documents) {
 			score += 10
-			why = append(why, "Papiere liegen vor: "+strings.Join(c.Documents, ", "))
+			why = append(why, tr(lang, "search.why.docs", localizeDocs(lang, c.Documents)))
 		}
 		if c.Rating >= 4.5 {
 			score += 5
-			why = append(why, fmt.Sprintf("Bewertung %.1f aus %d Einsätzen", c.Rating, c.JobsDone))
+			why = append(why, tr(lang, "search.why.crewRating", c.Rating, c.JobsDone))
 		}
 		if len(p.Regions) > 0 && containsFold(p.Regions[0], strings.Join(c.Regions, " ")) {
 			score += 5
-			why = append(why, "in Ihrer Region")
+			why = append(why, tr(lang, "search.why.profileRegion"))
+		}
+		if rel, ok := textScores[c.ID]; ok {
+			if pts := int(math.Round(scoreTextRelevance * rel)); pts > 0 {
+				score += pts
+				why = append(why, tr(lang, "search.why.textRelevance"))
+			}
 		}
 
 		if score > 100 {
@@ -66,7 +72,7 @@ func RankCrews(crews []model.Crew, intent model.Intent, p model.Profile) []model
 			score = 0
 		}
 		if len(why) == 0 {
-			why = append(why, "erfüllt Ihre Filter")
+			why = append(why, tr(lang, "search.why.default"))
 		}
 		matches = append(matches, model.Match{Kind: "crew", Crew: c, Fit: score, Why: why})
 	}
@@ -74,22 +80,38 @@ func RankCrews(crews []model.Crew, intent model.Intent, p model.Profile) []model
 	return matches
 }
 
-// WantsCrews reports whether an intent is about the supply side. A
-// Generalunternehmer asking an open question means crews; a Nachunternehmer
-// means offers.
+// WantsCrews and WantsOffers decide which side(s) of the market answer an
+// intent — never both false, so ambiguity always shows something:
+//   - an explicit "find_crews"/"find_offers" intent kind settles it outright,
+//   - a known role (owner looks for crews, executor looks for offers) settles
+//     it when the intent kind didn't,
+//   - anything left ambiguous (unknown role, ambiguous kind) answers with
+//     both sides mixed into one list rather than guessing which one the
+//     visitor meant.
 func WantsCrews(intent model.Intent, p model.Profile) bool {
-	if intent.Kind == "find_crews" {
+	switch intent.Kind {
+	case "find_crews":
 		return true
-	}
-	if intent.Kind == "find_offers" {
+	case "find_offers":
 		return false
 	}
-	return p.Role == "owner"
+	return p.Role == "" || p.Role == "unknown" || p.Role == "owner"
+}
+
+func WantsOffers(intent model.Intent, p model.Profile) bool {
+	switch intent.Kind {
+	case "find_offers":
+		return true
+	case "find_crews":
+		return false
+	}
+	return p.Role == "" || p.Role == "unknown" || p.Role == "executor"
 }
 
 // RunCrews is the crew-side pipeline: the parsed intent becomes a crew filter,
-// and the ranking explains itself the same way the offer side does.
-func RunCrews(ctx context.Context, deps app.Deps, intent model.Intent, p model.Profile) ([]model.Match, error) {
+// and the ranking explains itself the same way the offer side does,
+// including the text index's relevance signal (see textRelevance).
+func RunCrews(ctx context.Context, deps app.Deps, intent model.Intent, p model.Profile, lang i18n.Lang) ([]model.Match, error) {
 	crews, err := deps.Store.ListCrews(ctx, store.CrewFilter{
 		Trades:    intent.Trades,
 		Regions:   intent.Regions,
@@ -114,5 +136,6 @@ func RunCrews(ctx context.Context, deps app.Deps, intent model.Intent, p model.P
 			return nil, err
 		}
 	}
-	return RankCrews(crews, intent, p), nil
+	textScores := textRelevance(ctx, deps, intent.Raw, "crew")
+	return RankCrews(crews, intent, p, textScores, lang), nil
 }

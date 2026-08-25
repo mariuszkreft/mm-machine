@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
@@ -140,8 +141,22 @@ func TestQueryEscapesTheQuery(t *testing.T) {
 func TestQueryDegradedBadgeWithoutModel(t *testing.T) {
 	_, mux, _ := newTestHandler(t, nil)
 	rec := doForm(mux, http.MethodPost, "/find", url.Values{"q": {"steel work"}})
-	if !strings.Contains(rec.Body.String(), "matched without the model") {
+	// No Accept-Language header, so this lands on the app's own default
+	// (German — see i18n.Default).
+	if !strings.Contains(rec.Body.String(), i18n.T(i18n.Default, "search.degraded")) {
 		t.Error("expected the degraded badge when no model is configured")
+	}
+}
+
+func TestQueryDegradedBadgeInEnglish(t *testing.T) {
+	_, mux, _ := newTestHandler(t, nil)
+	req := httptest.NewRequest(http.MethodPost, "/find", strings.NewReader(url.Values{"q": {"steel work"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept-Language", "en")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), i18n.T(i18n.EN, "search.degraded")) {
+		t.Errorf("expected the English degraded badge, got %q", rec.Body.String())
 	}
 }
 

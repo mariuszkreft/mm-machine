@@ -29,6 +29,24 @@
   line-height: 1.35;
 }
 
+/* --- kind badge: offer vs. crew stays legible in a mixed list ------------- */
+
+.mm-badge.kind-offer {
+  background: var(--mm-accent-soft);
+  color: var(--mm-accent);
+}
+
+.mm-badge.kind-crew {
+  background: var(--mm-good);
+  color: var(--mm-accent-ink);
+}
+
+/* --- crew card: rate and availability read as one quiet line -------------- */
+
+.mm-crew-availability {
+  font-size: var(--mm-text-xs);
+}
+
 /* --- refine chips: one row, wraps on narrow viewports ----------------------- */
 
 .mm-refine {
@@ -40,6 +58,12 @@
 
 .mm-refine-form { display: contents; }
 .mm-refine-form .mm-chip { border: none; }
+
+.mm-refine-label {
+  color: var(--mm-muted);
+  font-size: var(--mm-text-xs);
+  align-self: center;
+}
 
 /* --- saved searches: sits with the prompt, run or drop each in one click --- */
 
