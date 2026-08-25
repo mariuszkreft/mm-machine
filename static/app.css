@@ -250,7 +250,8 @@ h1 {
 .metrics,
 .workspace,
 .workflow,
-.trust {
+.trust,
+.modules {
   padding: 54px clamp(18px, 5vw, 72px);
 }
 
@@ -271,6 +272,171 @@ h1 {
 .metrics span { color: #93c5fd; font-weight: 800; }
 .metrics strong { display: block; margin: 16px 0 8px; color: white; font-size: 18px; }
 .metrics p { margin-bottom: 0; color: #cbd5e1; line-height: 1.45; }
+
+.perspectives {
+  background: white;
+}
+
+.role-switch {
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #eef2f7;
+}
+
+.role-tab {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.role-tab.active {
+  color: white;
+  background: var(--ink);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .16);
+}
+
+.perspective-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.persona-main,
+.path-card,
+.pain-card,
+.persona-stats article,
+.module-grid article {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.persona-main {
+  grid-row: span 2;
+  padding: clamp(22px, 4vw, 38px);
+  background: #101827;
+  color: white;
+}
+
+.persona-main h3 {
+  max-width: 760px;
+  margin-bottom: 14px;
+  font-size: clamp(30px, 4vw, 56px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.persona-main p {
+  max-width: 720px;
+  color: #cbd5e1;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+blockquote {
+  margin: 22px 0;
+  padding-left: 18px;
+  border-left: 3px solid #38bdf8;
+  color: #e0f2fe;
+  font-size: 20px;
+  line-height: 1.45;
+}
+
+.persona-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.persona-stats article {
+  padding: 16px;
+}
+
+.persona-stats span,
+.module-grid span,
+.roadmap-grid span,
+.pricing-strip span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.persona-stats strong {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 30px;
+}
+
+.persona-stats p {
+  margin-bottom: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.path-card,
+.pain-card {
+  padding: 18px;
+}
+
+.path-card strong,
+.pain-card strong {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.path-card ol,
+.pain-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: #334155;
+}
+
+.modules {
+  background: #eef3f8;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.module-grid article {
+  min-height: 240px;
+  padding: 18px;
+}
+
+.module-grid h3 {
+  margin-bottom: 10px;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.module-grid p {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.module-grid span {
+  display: block;
+  margin-top: 18px;
+  color: var(--teal);
+}
 
 .section-title {
   display: flex;
@@ -424,9 +590,41 @@ h1 {
 .trust { padding-bottom: 80px; background: white; }
 .trust-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
+.roadmap-grid article span {
+  color: var(--amber);
+}
+
+.pricing-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+}
+
+.pricing-strip div {
+  padding: 18px;
+  background: #f8fafc;
+}
+
+.pricing-strip strong {
+  display: block;
+  margin: 8px 0;
+  font-size: 24px;
+}
+
+.pricing-strip p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
 @media (max-width: 980px) {
   .hero { grid-template-columns: 1fr; min-height: auto; }
-  .metrics, .offers, .lanes, .trust-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metrics, .offers, .lanes, .trust-grid, .module-grid, .pricing-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .perspective-panel { grid-template-columns: 1fr; }
   .nav { display: none; }
 }
 
@@ -451,7 +649,8 @@ h1 {
     padding-top: 38px;
   }
   .hero-panel { border-radius: 12px; }
-  .signal-grid, .metrics, .offers, .lanes, .trust-grid { grid-template-columns: 1fr; }
+  .signal-grid, .metrics, .offers, .lanes, .trust-grid, .module-grid, .persona-stats, .pricing-strip { grid-template-columns: 1fr; }
+  .role-switch { display: grid; width: 100%; }
   .section-title { display: block; }
   h1 {
     max-width: min(100%, 340px);
