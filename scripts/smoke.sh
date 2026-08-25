@@ -50,17 +50,34 @@ curl -fsS -X POST "$BASE/offers/new" \
   -d "title=Smoke test offer&location=Testville&category=QA&status=open" >/dev/null
 check "offer created"      "Smoke test offer" "$(curl -fsS "$BASE/offers?view=open")"
 
+echo "languages:"
+check "German by default"   "Was brauchen Sie"  "$(curl -fsS "$BASE/")"
+check "German page marked"  'lang="de"'         "$(curl -fsS "$BASE/")"
+check "English on request"  "What do you need"  "$(curl -fsS -H 'Accept-Language: en' "$BASE/")"
+check "example profiles"    "demo/enter"        "$(curl -fsS "$BASE/demo")"
+
+echo "example personas:"
+PJAR="$TMP/persona"
+curl -fsS -c "$PJAR" -b "$PJAR" -X POST "$BASE/demo/enter" -d "persona=gu-muenchen" -o /dev/null
+PERSONA_HOME="$(curl -fsS -b "$PJAR" "$BASE/")"
+check "persona banner"      "München"           "$PERSONA_HOME"
+CREWS="$(curl -fsS -c "$PJAR" -b "$PJAR" -X POST "$BASE/ask" \
+  --data-urlencode "message=6 Monteure für Trockenbau in Hamburg ab September, A1 vorhanden" --max-time 240)"
+check "crew search (DE)"    "mm-why"            "$CREWS"
+check "German reasons"      "Gewerk passt"      "$CREWS"
+
 echo "onboarding + search (live model):"
 JAR="$TMP/cookies"
 ASK1="$(curl -fsS -c "$JAR" -b "$JAR" -X POST "$BASE/ask" \
-  --data-urlencode "message=I need 6 electrical fitters in Munich for 3 weeks, A1 ready" --max-time 180)"
-check "onboarding learned"  "profile"         "$ASK1"
+  --data-urlencode "message=wir sind 8 Leute, Elektro und Trockenbau, Raum München, A1 liegt vor, ab Oktober frei" --max-time 240)"
+check "onboarding learned"  "mm-chip"         "$ASK1"
 ASK2="$(curl -fsS -c "$JAR" -b "$JAR" -X POST "$BASE/ask" \
-  --data-urlencode "message=show me open steel jobs in the Netherlands" --max-time 180)"
+  --data-urlencode "message=offene Stahlbauaufträge in den Niederlanden" --max-time 240)"
 check "search ranked"       "mm-results"      "$ASK2"
 check "match explained"     "mm-why"          "$ASK2"
 check "shell prompt"        "mm-prompt"       "$(curl -fsS "$BASE/")"
 check "about page kept"     "Montage Manager" "$(curl -fsS "$BASE/about")"
+check "pipeline in German"  "Auftrag anlegen" "$(curl -fsS "$BASE/offers?view=all")"
 
 echo "assistant (live model):"
 PANEL="$(curl -fsS "$BASE/assistant/panel?role=owner&route=home")"
@@ -70,7 +87,7 @@ ANSWER="$(curl -fsS -X POST "$BASE/assistant/message" \
   --data-urlencode "conversation=$CONV" \
   --data-urlencode "role=owner" \
   --data-urlencode "route=home" \
-  --data-urlencode "message=In one sentence: what is this app for?" --max-time 180)"
+  --data-urlencode "message=Wie funktioniert das hier?" --max-time 240)"
 check "model answered"     "mm-msg mm"       "$ANSWER"
 if [[ "$ANSWER" == *"did not answer"* || "$ANSWER" == *"empty answer"* ]]; then
   printf '  FAIL  model returned an error bubble\n'; FAILED=1
@@ -80,9 +97,9 @@ echo "feedback loop:"
 curl -fsS -X POST "$BASE/feedback" \
   --data-urlencode "conversation=$CONV" \
   --data-urlencode "kind=confusion" \
-  --data-urlencode "verbatim=The pipeline filters are not obvious on mobile." \
+  --data-urlencode "verbatim=Die Filter in der Auftragsliste sind auf dem Handy schwer zu finden." \
   --data-urlencode "role=owner" --data-urlencode "route=home" >/dev/null
-check "feedback stored"    "pipeline filters" "$(curl -fsS "$BASE/dev")"
+check "feedback stored"    "Handy"           "$(curl -fsS "$BASE/dev")"
 curl -fsS -X POST "$BASE/dev/refresh" --max-time 240 >/dev/null
 check "backlog generated"  "backlog-item"    "$(curl -fsS "$BASE/dev")"
 

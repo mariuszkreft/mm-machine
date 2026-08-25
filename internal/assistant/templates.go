@@ -7,7 +7,7 @@ const panelHTML = `{{define "panel"}}<div id="assistant-panel" class="assistant-
     <span class="model">{{.Model}}</span>
   </div>
   <div id="assistant-log" class="assistant-log">
-    {{if .History}}{{range .History}}<div class="bubble {{.Role}}"><span class="who">{{bubbleLabel $.Lang .Role}}</span><p>{{.Content}}</p></div>{{end}}{{else}}<div class="bubble assistant"><span class="who">{{bubbleLabel .Lang "assistant"}}</span><p>{{.Greeting}}</p></div>{{end}}
+    {{if .History}}{{range .History}}<div class="mm-msg {{if eq .Role "user"}}you{{else}}mm{{end}}"><span class="mm-who">{{bubbleLabel $.Lang .Role}}</span><p>{{.Content}}</p></div>{{end}}{{else}}<div class="mm-msg mm"><span class="mm-who">{{bubbleLabel .Lang "assistant"}}</span><p>{{.Greeting}}</p></div>{{end}}
   </div>
   <div id="assistant-typing" class="typing-indicator" aria-live="polite"><span></span><span></span><span></span></div>
   <form class="assistant-form"
@@ -69,4 +69,4 @@ const panelHTML = `{{define "panel"}}<div id="assistant-panel" class="assistant-
   </script>
 </div>{{end}}`
 
-const bubbleHTML = `{{define "bubble"}}<div class="bubble {{.Role}}"><span class="who">{{.Role}}</span><p>{{.Content}}</p></div>{{end}}`
+const bubbleHTML = `{{define "bubble"}}<div class="mm-msg {{if eq .Role "user"}}you{{else}}mm{{end}}"><span class="mm-who">{{.Role}}</span><p>{{.Content}}</p></div>{{end}}`

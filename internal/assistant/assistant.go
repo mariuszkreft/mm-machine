@@ -492,9 +492,19 @@ func writeSSE(w http.ResponseWriter, event, data string) {
 // assistant answer sits in the same conversation as onboarding and search.
 // The CSS class stays the raw role ("user"/"assistant", matching the history
 // partial below) while the visible tag is localized.
+// writeBubble renders one message in the shared thread primitives, so an
+// assistant answer sits in the same conversation as onboarding and search.
+// The role label is localized; the class names are the design system's.
 func writeBubble(w http.ResponseWriter, role, text string, lang i18n.Lang) {
-	fmt.Fprintf(w, `<div class="bubble %s"><span class="who">%s</span><p>%s</p></div>`,
-		html.EscapeString(role), html.EscapeString(lt(lang, "bubble."+role)), html.EscapeString(text))
+	fmt.Fprintf(w, `<div class="mm-msg %s"><span class="mm-who">%s</span><p>%s</p></div>`,
+		bubbleClass(role), html.EscapeString(lt(lang, "bubble."+role)), html.EscapeString(text))
+}
+
+func bubbleClass(role string) string {
+	if role == "user" {
+		return "you"
+	}
+	return "mm"
 }
 
 // Ask is the entry point behind the home prompt: it resolves (or starts) the
