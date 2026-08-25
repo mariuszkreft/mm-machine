@@ -28,6 +28,8 @@ const (
 	DefaultModel = "deepseek-v4-flash-0731"
 	// DefaultMaxTokens must stay well above the model's hidden preamble.
 	DefaultMaxTokens = 1024
+	// maxTokenBudget caps the doubling an empty answer triggers.
+	maxTokenBudget = 4096
 
 	maxAttempts   = 3
 	baseBackoff   = 200 * time.Millisecond
@@ -161,7 +163,10 @@ func isRetryable(err error) bool {
 		return false
 	}
 	if errors.Is(err, ErrEmptyAnswer) {
-		return false
+		// The served model occasionally spends a whole completion on its
+		// reasoning channel and returns no content at all. Asking again is
+		// idempotent and usually enough.
+		return true
 	}
 	if errors.Is(err, context.Canceled) {
 		return false
@@ -206,6 +211,11 @@ func (c *client) Chat(ctx context.Context, req Request) (Response, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		resp, err := c.chatOnce(ctx, req)
+		if errors.Is(err, ErrEmptyAnswer) {
+			// Give the next attempt more room: an empty answer is usually the
+			// reasoning channel eating the whole budget.
+			req = withDoubledBudget(req, c.cfg.MaxTokens)
+		}
 		if err == nil {
 			return resp, nil
 		}
@@ -239,7 +249,7 @@ func (c *client) chatOnce(ctx context.Context, req Request) (Response, error) {
 		return Response{}, fmt.Errorf("llm: %s [%s]: empty choices", c.cfg.BaseURL, c.cfg.Model)
 	}
 	ch := parsed.Choices[0]
-	if ch.Message.Content == "" && ch.FinishReason == "length" {
+	if strings.TrimSpace(ch.Message.Content) == "" {
 		return Response{}, newEmptyAnswerErr(c.cfg.BaseURL, c.cfg.Model)
 	}
 	return Response{
@@ -273,6 +283,9 @@ func (c *client) Stream(ctx context.Context, req Request, fn func(Delta) error) 
 			return nil
 		}
 		lastErr = err
+		if errors.Is(err, ErrEmptyAnswer) {
+			req = withDoubledBudget(req, c.cfg.MaxTokens)
+		}
 		if delivered || !isRetryable(err) || attempt == maxAttempts {
 			return err
 		}
@@ -281,6 +294,21 @@ func (c *client) Stream(ctx context.Context, req Request, fn func(Delta) error) 
 		}
 	}
 	return lastErr
+}
+
+// withDoubledBudget returns req with twice the token budget it effectively had.
+func withDoubledBudget(req Request, fallback int) Request {
+	budget := req.MaxTokens
+	if budget <= 0 {
+		budget = fallback
+	}
+	if budget <= 0 {
+		budget = DefaultMaxTokens
+	}
+	if budget < maxTokenBudget {
+		req.MaxTokens = min(budget*2, maxTokenBudget)
+	}
+	return req
 }
 
 // streamOnce makes a single attempt. It reports whether any content delta
@@ -299,16 +327,25 @@ func (c *client) streamOnce(ctx context.Context, req Request, fn func(Delta) err
 	}
 
 	dec := newSSEReader(resp.Body)
+	// finish closes a stream that ended cleanly. A stream that ended without a
+	// single content delta is the model's empty-answer hiccup, not an answer:
+	// report it so the caller can retry (nothing was delivered yet).
+	finish := func() (bool, error) {
+		if !delivered {
+			return false, newEmptyAnswerErr(c.cfg.BaseURL, c.cfg.Model)
+		}
+		return delivered, callFn(fn, Delta{Done: true})
+	}
 	for {
 		payload, err := dec.next()
 		if err == io.EOF {
-			return delivered, callFn(fn, Delta{Done: true})
+			return finish()
 		}
 		if err != nil {
 			return delivered, fmt.Errorf("llm: %s [%s]: stream read: %w", c.cfg.BaseURL, c.cfg.Model, err)
 		}
 		if payload == "[DONE]" {
-			return delivered, callFn(fn, Delta{Done: true})
+			return finish()
 		}
 		var parsed chatResponse
 		if json.Unmarshal([]byte(payload), &parsed) != nil || len(parsed.Choices) == 0 {
