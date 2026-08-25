@@ -42,24 +42,40 @@ type Dashboard struct {
 
 // Handler serves the public surface.
 type Handler struct {
-	deps  app.Deps
-	page  *template.Template
-	shell *template.Template
-	part  *template.Template
+	deps     app.Deps
+	page     *template.Template
+	shell    *template.Template
+	part     *template.Template
+	pipeline *template.Template
 }
 
 var funcs = template.FuncMap{
 	"lower": strings.ToLower,
 	"itoa":  strconv.Itoa,
+	// signalTone maps a machine-produced Signal onto the badge tone that
+	// carries it — colour is never the only cue, the word is always there too.
+	"signalTone": func(signal string) string {
+		switch signal {
+		case "OK":
+			return "good"
+		case "Review":
+			return "warn"
+		case "Attention":
+			return "bad"
+		default:
+			return ""
+		}
+	},
 }
 
 // Register wires the public routes onto mux and returns the handler.
 func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 	h := &Handler{
-		deps:  deps,
-		page:  template.Must(template.New("page").Funcs(funcs).Parse(aboutHTML + offersHTML + perspectiveHTML)),
-		shell: template.Must(template.New("shell").Funcs(funcs).Parse(shellHTML + greetingHTML)),
-		part:  template.Must(template.New("partial").Funcs(funcs).Parse(offersHTML + perspectiveHTML)),
+		deps:     deps,
+		page:     template.Must(template.New("page").Funcs(funcs).Parse(aboutHTML + perspectiveHTML)),
+		shell:    template.Must(template.New("shell").Funcs(funcs).Parse(shellHTML + greetingHTML)),
+		part:     template.Must(template.New("partial").Funcs(funcs).Parse(offersHTML + perspectiveHTML)),
+		pipeline: template.Must(template.New("pipeline").Funcs(funcs).Parse(pipelineHTML + pipelineToolbarHTML + offersHTML)),
 	}
 	mux.Handle("/static/", http.FileServer(http.FS(staticFS)))
 	mux.HandleFunc("/", h.home)
@@ -129,7 +145,23 @@ func (h *Handler) about(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// offers serves the pipeline. An htmx request (a filter, a create, a status
+// change) gets the fragment it swaps in; a direct visit gets the standalone
+// pipeline page the fragment lives inside — so /offers is a real page, not
+// just a partial only reachable from inside another one.
 func (h *Handler) offers(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("HX-Request") != "true" {
+		data, err := h.dashboard(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := h.pipeline.ExecuteTemplate(w, "pipeline", data); err != nil {
+			log.Printf("web: render pipeline: %v", err)
+		}
+		return
+	}
 	h.renderPartial(w, r, "offers")
 }
 
