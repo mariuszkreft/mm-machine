@@ -267,6 +267,10 @@ func (h *Handler) backlogJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if items == nil {
+		// A nil slice encodes as null, which breaks JSON consumers expecting a list.
+		items = []model.BacklogItem{}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(items)
 }
