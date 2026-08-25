@@ -71,7 +71,7 @@ ANSWER="$(curl -fsS -X POST "$BASE/assistant/message" \
   --data-urlencode "role=owner" \
   --data-urlencode "route=home" \
   --data-urlencode "message=In one sentence: what is this app for?" --max-time 180)"
-check "model answered"     "bubble assistant" "$ANSWER"
+check "model answered"     "mm-msg mm"       "$ANSWER"
 if [[ "$ANSWER" == *"did not answer"* || "$ANSWER" == *"empty answer"* ]]; then
   printf '  FAIL  model returned an error bubble\n'; FAILED=1
 fi

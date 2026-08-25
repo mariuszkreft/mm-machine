@@ -1,1 +1,102 @@
 /* Search-local styles. Tokens and primitives live in base.css. */
+
+/* --- summary line: honest fallback until the streamed sentence lands ------- */
+
+.mm-summary-live { display: none; }
+.mm-summary.mm-live .mm-summary-fallback { display: none; }
+.mm-summary.mm-live .mm-summary-live { display: block; }
+
+/* --- result cards: denser than the pipeline's, fit meter reads at a glance - */
+
+.mm-cards {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--mm-2);
+}
+
+.mm-card {
+  gap: var(--mm-1);
+  padding: var(--mm-3);
+}
+
+.mm-card h3 {
+  font-size: var(--mm-text-sm);
+  line-height: 1.25;
+}
+
+.mm-card .mm-meter { margin: 2px 0; }
+
+.mm-why li {
+  line-height: 1.35;
+}
+
+/* --- refine chips: one row, wraps on narrow viewports ----------------------- */
+
+.mm-refine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-2);
+  margin-top: var(--mm-2);
+}
+
+.mm-refine-form { display: contents; }
+.mm-refine-form .mm-chip { border: none; }
+
+/* --- saved searches: sits with the prompt, run or drop each in one click --- */
+
+.mm-saved {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-2);
+  margin-top: var(--mm-2);
+}
+
+.mm-saved-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mm-saved-run,
+.mm-saved-del { display: contents; }
+
+.mm-saved-del .mm-btn {
+  padding: 0 var(--mm-1);
+  font-size: var(--mm-text-sm);
+  line-height: 1;
+}
+
+/* --- loading skeletons: shown only while a request is actually in flight --- */
+
+.mm-refine-form.htmx-request .mm-chip,
+.mm-saved-run.htmx-request .mm-chip,
+.mm-suggest.htmx-request .mm-chip {
+  color: transparent;
+  position: relative;
+  pointer-events: none;
+}
+
+.mm-refine-form.htmx-request .mm-chip::after,
+.mm-saved-run.htmx-request .mm-chip::after,
+.mm-suggest.htmx-request .mm-chip::after {
+  content: "";
+  position: absolute;
+  inset: 4px var(--mm-3);
+  border-radius: var(--mm-r-sm);
+  background: linear-gradient(90deg, var(--mm-surface-2), var(--mm-line), var(--mm-surface-2));
+  background-size: 200% 100%;
+  animation: mm-shimmer 1.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-refine-form.htmx-request .mm-chip::after,
+  .mm-saved-run.htmx-request .mm-chip::after,
+  .mm-suggest.htmx-request .mm-chip::after { animation: none; }
+}
+
+/* --- mobile ------------------------------------------------------------------ */
+
+@media (max-width: 480px) {
+  .mm-cards { grid-template-columns: 1fr; }
+  .mm-refine, .mm-saved { gap: var(--mm-1); }
+  .mm-card { padding: var(--mm-2); }
+}

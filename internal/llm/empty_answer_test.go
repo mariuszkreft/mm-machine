@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,45 @@ func TestStreamRetriesEmptyStream(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+// The served model answers with empty content when the JSON instruction
+// arrives as a trailing system turn after the user message. JSON must fold the
+// instruction into the leading system turn instead.
+func TestJSONFoldsInstructionIntoSystemTurn(t *testing.T) {
+	var got chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL, Model: "test"})
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	err := c.JSON(context.Background(), Request{Messages: []Message{
+		{Role: "system", Content: "You extract facts."},
+		{Role: "user", Content: "8 people, electrical, Munich"},
+	}}, `{"ok":true}`, &out)
+	if err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	if !out.OK {
+		t.Fatal("did not unmarshal the answer")
+	}
+	if n := len(got.Messages); n != 2 {
+		t.Fatalf("sent %d messages, want the original 2 with the instruction folded in", n)
+	}
+	if last := got.Messages[len(got.Messages)-1]; last.Role != "user" {
+		t.Fatalf("last message role = %q, want the user turn to stay last", last.Role)
+	}
+	if !strings.Contains(got.Messages[0].Content, "single JSON value") {
+		t.Fatalf("instruction not folded into the system turn: %q", got.Messages[0].Content)
+	}
+	if got.MaxTokens < 1536 {
+		t.Fatalf("max_tokens = %d, want room for the reasoning preamble", got.MaxTokens)
 	}
 }

@@ -7,20 +7,19 @@ const devHTML = `{{define "dev"}}<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Montage Manager · dev loop</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
-  <link rel="stylesheet" href="/static/app.css?v=4">
-  <link rel="stylesheet" href="/static/dev.css?v=2">
+  <link rel="stylesheet" href="/static/base.css?v=2">
+  <link rel="stylesheet" href="/static/dev.css?v=3">
 </head>
-<body class="dev">
-  <header class="topbar">
-    <a class="brand" href="/"><span class="brand-mark">MM</span><span>Montage Manager</span></a>
-    <nav class="nav"><a href="/">App</a><a href="/dev">Dev loop</a><a href="/dev/backlog.json">backlog.json</a></nav>
+<body>
+<div class="mm-shell">
+  <header class="mm-top">
+    <a class="mm-brand" href="/"><span class="mm-brand-mark">MM</span><span>Montage Manager</span></a>
+    <nav><a href="/">App</a><a href="/offers">Pipeline</a><a href="/dev/backlog.json">backlog.json</a></nav>
   </header>
-  <main>
-    <section class="workspace">
-      <div class="section-title">
-        <p class="eyebrow">Generated {{.Generated}} · {{.Model}} · refresh every {{.Interval}}</p>
-        <h2>What users told the app about itself</h2>
-      </div>
+  <main class="mm-main">
+    <section class="mm-ask">
+      <h1>What users told the app about itself</h1>
+      <p class="mm-lede mm-mono">Generated {{.Generated}} · {{.Model}} · refresh every {{.Interval}}</p>
       <form id="filter-form" class="filter-bar">
         <label>Kind
           <select name="kind" hx-get="/dev/filter" hx-trigger="change" hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">
@@ -34,12 +33,17 @@ const devHTML = `{{define "dev"}}<!doctype html>
             {{range $s := (slice "proposed" "accepted" "shipped" "rejected")}}<option value="{{$s}}" {{if eq $.Filters.Status $s}}selected{{end}}>{{$s}}</option>{{end}}
           </select>
         </label>
-        <button type="button" class="primary" hx-post="/dev/refresh" hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Regenerate backlog</button>
+        <button type="button" class="mm-btn" hx-post="/dev/refresh" hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Regenerate backlog</button>
       </form>
       {{if .LastError}}<div class="dev-error">Last regeneration failed: {{.LastError}}</div>{{end}}
       {{template "workspace" .}}
     </section>
   </main>
+  <footer class="mm-foot">
+    <span>dev loop · the app's own backlog, written by its users</span>
+    <a href="/">back to the app</a>
+  </footer>
+</div>
 </body>
 </html>{{end}}`
 
@@ -57,39 +61,39 @@ const countsHTML = `{{define "counts"}}<div class="counts-row">
   <div class="count-tile"><strong>{{.LastRun}}</strong><span>last regenerated</span></div>
 </div>{{end}}`
 
-const backlogHTML = `{{define "backlog"}}<div class="section-title"><h2>Backlog</h2></div>
+const backlogHTML = `{{define "backlog"}}<h2 class="dev-heading">Backlog</h2>
 <div class="backlog">
   {{range .Backlog}}
-  <article class="backlog-item">
-    <div class="backlog-top">
+  <article class="mm-card backlog-item">
+    <div class="mm-card-head">
       <strong>{{.Title}}</strong>
-      <span class="status status-{{.Status}}">{{.Status}}</span>
-      <span class="score">{{printf "%.1f" .Score}}</span>
+      <span class="mm-badge status-{{.Status}}">{{.Status}}</span>
+      <span class="mm-fit">{{printf "%.1f" .Score}}</span>
     </div>
-    <div class="score-bar"><span style="width:{{printf "%.0f" .ScorePct}}%"></span></div>
+    <div class="mm-meter"><i style="width:{{printf "%.0f" .ScorePct}}%"></i></div>
     <p>{{.Rationale}}</p>
-    <span class="meta">{{.Count}} report(s) · avg severity {{printf "%.1f" .AvgSeverity}} · {{.Kind}} · {{.Theme}}</span>
-    <ul>{{range .Evidence}}<li>{{.}}</li>{{end}}</ul>
+    <span class="mm-muted mm-mono">{{.Count}} report(s) · avg severity {{printf "%.1f" .AvgSeverity}} · {{.Kind}} · {{.Theme}}</span>
+    <ul class="mm-why">{{range .Evidence}}<li>{{.}}</li>{{end}}</ul>
     <div class="backlog-actions">
-      <button hx-post="/dev/backlog/{{.ID}}/status" hx-vals='{"status":"accepted"}' hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Accept</button>
-      <button hx-post="/dev/backlog/{{.ID}}/status" hx-vals='{"status":"shipped"}' hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Ship</button>
-      <button hx-post="/dev/backlog/{{.ID}}/status" hx-vals='{"status":"rejected"}' hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Reject</button>
+      <button class="mm-chip" hx-post="/dev/backlog/{{.ID}}/status" hx-vals='{"status":"accepted"}' hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Accept</button>
+      <button class="mm-chip" hx-post="/dev/backlog/{{.ID}}/status" hx-vals='{"status":"shipped"}' hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Ship</button>
+      <button class="mm-chip" hx-post="/dev/backlog/{{.ID}}/status" hx-vals='{"status":"rejected"}' hx-include="#filter-form" hx-target="#workspace-body" hx-swap="outerHTML">Reject</button>
     </div>
   </article>
   {{else}}
-  <div class="empty">Backlog is empty. Collect feedback, then regenerate.</div>
+  <div class="mm-empty">Backlog is empty. Collect feedback, then regenerate.</div>
   {{end}}
 </div>{{end}}`
 
-const feedbackHTML = `{{define "feedback"}}<div class="section-title"><h2>Raw feedback</h2></div>
+const feedbackHTML = `{{define "feedback"}}<h2 class="dev-heading">Raw feedback</h2>
 <div class="feedback-list">
   {{range .Feedback}}
-  <article class="feedback-item">
-    <span class="badge {{.Kind}}">{{.Kind}}</span>
+  <article class="mm-card feedback-item">
+    <span class="mm-badge kind-{{.Kind}}">{{.Kind}}</span>
     <p>{{.Verbatim}}</p>
-    <span class="meta">cluster: {{.Theme}} · severity {{.Severity}} · {{.Source}} · {{.Role}} · {{.Status}}</span>
+    <span class="mm-muted mm-mono">cluster: {{.Theme}} · severity {{.Severity}} · {{.Source}} · {{.Role}} · {{.Status}}</span>
   </article>
   {{else}}
-  <div class="empty">No feedback yet. Talk to the assistant on the home page.</div>
+  <div class="mm-empty">No feedback yet. Ask the app a question on the home page and tell it what is wrong.</div>
   {{end}}
 </div>{{end}}`

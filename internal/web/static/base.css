@@ -103,7 +103,7 @@ a { color: inherit; }
 
 :where(button, input, select, textarea) { font: inherit; color: inherit; }
 
-:where(button, a, input, select, textarea):focus-visible {
+:where(button, a, input, select, textarea, summary):focus-visible {
   outline: none;
   box-shadow: var(--mm-focus);
   border-radius: var(--mm-r-sm);
@@ -117,17 +117,22 @@ a { color: inherit; }
   grid-template-rows: auto 1fr auto;
 }
 
-.mm-top {
+/* Header and prompt stick together as one unit, so the prompt stays reachable
+   while the thread below it scrolls — no height math, no magic offsets. */
+.mm-topzone {
   position: sticky;
   top: 0;
   z-index: 20;
+  background: color-mix(in srgb, var(--mm-bg) 88%, transparent);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--mm-line);
+}
+
+.mm-top {
   display: flex;
   align-items: center;
   gap: var(--mm-4);
   padding: var(--mm-3) clamp(var(--mm-4), 4vw, var(--mm-6));
-  background: color-mix(in srgb, var(--mm-bg) 88%, transparent);
-  backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--mm-line);
 }
 
 .mm-brand {
@@ -165,7 +170,7 @@ a { color: inherit; }
 .mm-main {
   width: min(100% - 2 * var(--mm-4), var(--mm-max));
   margin-inline: auto;
-  padding: clamp(var(--mm-5), 5vw, var(--mm-8)) 0 var(--mm-8);
+  padding: var(--mm-6) 0 var(--mm-8);
 }
 
 .mm-foot {
@@ -180,16 +185,22 @@ a { color: inherit; }
 
 /* --- prompt: the primary control ------------------------------------------ */
 
-.mm-ask { display: grid; gap: var(--mm-3); }
+.mm-ask {
+  display: grid;
+  gap: var(--mm-3);
+  width: min(100% - 2 * var(--mm-4), var(--mm-max));
+  margin-inline: auto;
+  padding: var(--mm-4) 0;
+}
 
 .mm-ask h1 {
   margin: 0;
-  font-size: var(--mm-text-2xl);
+  font-size: var(--mm-text-xl);
   line-height: 1.1;
-  letter-spacing: -.03em;
+  letter-spacing: -.02em;
 }
 
-.mm-ask .mm-lede {
+.mm-lede {
   margin: 0;
   max-width: var(--mm-measure);
   color: var(--mm-muted);
@@ -274,6 +285,7 @@ a { color: inherit; }
 
 .mm-chip:hover { border-color: var(--mm-accent); color: var(--mm-accent); }
 .mm-chip.on { background: var(--mm-accent-soft); border-color: var(--mm-accent); color: var(--mm-accent); }
+.mm-chip[disabled] { cursor: default; opacity: .8; }
 
 .mm-badge {
   display: inline-flex;
@@ -297,6 +309,50 @@ a { color: inherit; }
   border-radius: var(--mm-r-lg);
   box-shadow: var(--mm-shadow);
 }
+
+.mm-panel h3 { margin: var(--mm-2) 0; font-size: var(--mm-text-lg); letter-spacing: -.01em; }
+
+.mm-panel .mm-panel { margin-top: var(--mm-3); box-shadow: none; }
+
+.mm-panel ol, .mm-panel ul {
+  display: grid;
+  gap: var(--mm-1);
+  margin: var(--mm-2) 0 0;
+  padding-left: 1.1em;
+  color: var(--mm-ink-soft);
+}
+
+/* A quiet section header — eyebrow + heading, no gradients. */
+.mm-eyebrow {
+  margin: 0 0 var(--mm-1);
+  font-size: var(--mm-text-xs);
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--mm-accent);
+}
+
+.mm-section {
+  padding: var(--mm-7) 0;
+  border-top: 1px solid var(--mm-line);
+}
+
+.mm-section > h2 {
+  margin: 0 0 var(--mm-5);
+  font-size: var(--mm-text-xl);
+  letter-spacing: -.02em;
+}
+
+/* A row of filter controls: chips on one side, a field on the other. */
+.mm-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mm-3);
+  margin-bottom: var(--mm-4);
+}
+
+.mm-toolbar form { flex: 1 1 240px; }
 
 .mm-field {
   width: 100%;
@@ -330,6 +386,67 @@ a { color: inherit; }
 
 .mm-muted { color: var(--mm-muted); }
 .mm-mono { font-family: var(--mm-mono); font-size: var(--mm-text-xs); }
+
+/* Visually hidden, still announced — for state that only a skeleton or an
+   icon otherwise conveys. */
+.mm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A row of label/value stats — counts, quick metrics. */
+.mm-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-4);
+}
+
+.mm-stat { display: grid; gap: 2px; }
+
+.mm-stat span {
+  font-size: var(--mm-text-xs);
+  color: var(--mm-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.mm-stat strong { font-size: var(--mm-text-lg); letter-spacing: -.01em; }
+
+/* A linear status control — one thing to look at, not a scatter of buttons. */
+.mm-steps {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  background: var(--mm-surface-2);
+  border-radius: var(--mm-r-pill);
+}
+
+.mm-steps .mm-chip { border-color: transparent; background: transparent; }
+.mm-steps .mm-chip.on { background: var(--mm-surface); border-color: var(--mm-line); color: var(--mm-ink); box-shadow: var(--mm-shadow); }
+.mm-steps .mm-chip[disabled] { cursor: default; }
+
+/* A form that collapses until asked for. */
+.mm-form { display: grid; gap: var(--mm-3); margin-top: var(--mm-3); }
+.mm-form label { display: grid; gap: var(--mm-1); font-size: var(--mm-text-xs); color: var(--mm-muted); }
+
+details.mm-panel { padding: var(--mm-4) var(--mm-5); }
+details.mm-panel > summary {
+  cursor: pointer;
+  font-weight: 550;
+  list-style: none;
+}
+details.mm-panel > summary::-webkit-details-marker { display: none; }
+details.mm-panel > summary::before { content: "+ "; color: var(--mm-accent); }
+details.mm-panel[open] > summary::before { content: "\2212 "; }
+details.mm-panel[open] > summary { margin-bottom: var(--mm-3); }
 
 /* --- thread: conversation + results ---------------------------------------- */
 

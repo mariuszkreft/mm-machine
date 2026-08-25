@@ -301,7 +301,7 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writeBubble(w, "user", text)
-	fmt.Fprintf(w, `<div class="bubble assistant" hx-ext="sse" sse-connect="%s" sse-swap="message" sse-close="done" hx-target="find p" hx-swap="beforeend"><span class="who">assistant</span><p></p></div>`,
+	fmt.Fprintf(w, `<div class="mm-msg mm" hx-ext="sse" sse-connect="%s" sse-swap="message" sse-close="done" hx-target="find p" hx-swap="beforeend"><span class="mm-who">assistant</span><p></p></div>`,
 		html.EscapeString(streamURL))
 }
 
@@ -386,9 +386,49 @@ func writeSSE(w http.ResponseWriter, event, data string) {
 	fmt.Fprint(w, "\n")
 }
 
+// writeBubble renders one message in the shared thread primitives, so an
+// assistant answer sits in the same conversation as onboarding and search.
 func writeBubble(w http.ResponseWriter, role, text string) {
-	fmt.Fprintf(w, `<div class="bubble %s"><span class="who">%s</span><p>%s</p></div>`,
-		html.EscapeString(role), html.EscapeString(role), html.EscapeString(text))
+	fmt.Fprintf(w, `<div class="mm-msg %s"><span class="mm-who">%s</span><p>%s</p></div>`,
+		bubbleClass(role), html.EscapeString(role), html.EscapeString(text))
+}
+
+func bubbleClass(role string) string {
+	if role == "user" {
+		return "you"
+	}
+	return "mm"
+}
+
+// Ask is the entry point behind the home prompt: it resolves (or starts) the
+// visitor's conversation and answers in the thread, streaming. It exists so
+// main.go can route a question about the app here without this package
+// knowing anything about routing.
+func (h *Handler) Ask(w http.ResponseWriter, r *http.Request) {
+	text := strings.TrimSpace(firstNonEmpty(r.FormValue("message"), r.URL.Query().Get("message")))
+	if text == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	role := firstNonEmpty(r.FormValue("role"), "owner")
+	route := firstNonEmpty(r.FormValue("route"), "home")
+	conv, err := h.conversation(w, r, role, route)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// turn reads its inputs from the query string; hand it a request carrying
+	// the resolved conversation.
+	q := url.Values{
+		"conversation": {conv.ID},
+		"role":         {role},
+		"route":        {route},
+		"message":      {text},
+	}
+	r2 := r.Clone(r.Context())
+	r2.Method = http.MethodGet
+	r2.URL.RawQuery = q.Encode()
+	h.turn(w, r2)
 }
 
 // feedback stores an explicit piece of feedback from the widget.

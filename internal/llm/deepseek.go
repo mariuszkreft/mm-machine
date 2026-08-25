@@ -421,10 +421,27 @@ func (c *client) askJSON(ctx context.Context, req Request, schemaHint string, st
 	if strict {
 		instruction = "Your previous answer was not valid JSON. Respond again with ONLY one JSON value: no prose, no explanation, no markdown code fences, nothing before or after it. Shape:\n" + schemaHint
 	}
+	// Where the instruction goes matters. A trailing system turn AFTER the user
+	// message makes deepseek-v4-flash answer with empty content and
+	// finish_reason "stop" — verified against the live endpoint. Folding the
+	// same words into the leading system turn (or, failing that, into the last
+	// user turn) answers reliably.
 	msgs := append([]Message(nil), req.Messages...)
-	msgs = append(msgs, Message{Role: "system", Content: instruction})
+	switch {
+	case len(msgs) > 0 && msgs[0].Role == "system":
+		msgs[0].Content = msgs[0].Content + "\n\n" + instruction
+	case len(msgs) > 0 && msgs[len(msgs)-1].Role == "user":
+		msgs[len(msgs)-1].Content = msgs[len(msgs)-1].Content + "\n\n" + instruction
+	default:
+		msgs = append([]Message{{Role: "system", Content: instruction}}, msgs...)
+	}
 	r2 := req
 	r2.Messages = msgs
+	// JSON answers are short, but the hidden reasoning preamble in front of
+	// them is not: give the budget room so the content is never truncated away.
+	if r2.MaxTokens < 1536 {
+		r2.MaxTokens = 1536
+	}
 	return c.Chat(ctx, r2)
 }
 

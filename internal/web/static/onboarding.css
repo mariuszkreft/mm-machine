@@ -1,1 +1,66 @@
 /* Onboarding-local styles. Tokens and primitives live in base.css. */
+
+/* The confirmation card and the standing profile panel are the same
+   partial — this just gives it a little more air than a plain .mm-panel. */
+.onb-profile {
+  display: grid;
+  gap: var(--mm-3);
+  max-width: var(--mm-measure);
+}
+
+.onb-profile .mm-suggest { gap: var(--mm-2); }
+
+/* Remove affordance riding inside an .mm-chip: small, quiet, only the "×"
+   itself is a click target. */
+.onb-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--mm-1);
+  padding: 0;
+  width: 14px;
+  height: 14px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: .6;
+  font-size: var(--mm-text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.onb-chip-x:hover { opacity: 1; }
+
+.onb-edit-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mm-2);
+}
+
+.onb-edit-row {
+  display: flex;
+  gap: var(--mm-1);
+  flex: 1 1 180px;
+}
+
+.onb-edit-row .mm-field {
+  padding: var(--mm-1) var(--mm-2);
+  font-size: var(--mm-text-sm);
+}
+
+/* The streamed one-line acknowledgement types in below the question; keep it
+   visually quieter than the question itself while it fills. */
+.onb-ack p {
+  color: var(--mm-ink-soft);
+  font-size: var(--mm-text-sm);
+}
+
+.onb-ack p:empty::before {
+  content: "…";
+  color: var(--mm-muted);
+}
+
+@media (max-width: 480px) {
+  .onb-edit-row { flex: 1 1 100%; }
+  .onb-edit-rows { flex-direction: column; }
+}

@@ -98,3 +98,29 @@ CREATE TABLE IF NOT EXISTS backlog (
     status       TEXT NOT NULL,
     updated_at   INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id           TEXT PRIMARY KEY,
+    role         TEXT NOT NULL DEFAULT '',
+    company      TEXT NOT NULL DEFAULT '',
+    contact      TEXT NOT NULL DEFAULT '',
+    trades       TEXT NOT NULL DEFAULT '[]',
+    regions      TEXT NOT NULL DEFAULT '[]',
+    crew_size    INTEGER NOT NULL DEFAULT 0,
+    languages    TEXT NOT NULL DEFAULT '[]',
+    documents    TEXT NOT NULL DEFAULT '[]',
+    availability TEXT NOT NULL DEFAULT '',
+    notes        TEXT NOT NULL DEFAULT '',
+    completeness INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    query      TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS saved_searches_profile ON saved_searches(profile_id);
