@@ -3,18 +3,22 @@
 // exposes them at /dev plus docs/backlog.md so the next development iteration
 // starts from what users actually said.
 //
-// This is the phase-0 baseline: a mechanical clusterer and the /dev surface.
-// LLM clustering, the markdown export and status transitions are the dev-loop
-// worker's job.
+// Clustering prefers the local LLM (see cluster.go) and always falls back to
+// a mechanical grouping-by-theme when the model is unreachable or returns
+// garbage, so /dev never breaks because the cluster is down.
 package devloop
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"log"
 	"net/http"
-	"sort"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mm-machine/internal/app"
@@ -32,24 +36,130 @@ type Handler struct {
 func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 	h := &Handler{
 		deps: deps,
-		tpl:  template.Must(template.New("dev").Parse(devHTML + backlogHTML)),
+		tpl:  template.Must(template.New("dev").Funcs(funcs).Parse(devHTML + workspaceHTML + countsHTML + backlogHTML + feedbackHTML)),
 	}
 	mux.HandleFunc("/dev", h.page)
+	mux.HandleFunc("/dev/filter", h.filter)
 	mux.HandleFunc("/dev/refresh", h.refresh)
+	mux.HandleFunc("POST /dev/backlog/{id}/status", h.setStatus)
 	mux.HandleFunc("/dev/backlog.json", h.backlogJSON)
 	return h
+}
+
+var funcs = template.FuncMap{
+	"slice": func(items ...string) []string { return items },
+}
+
+// filters narrows the backlog and feedback lists shown on /dev.
+type filters struct {
+	Kind   string
+	Status string
+}
+
+func filtersFromRequest(r *http.Request) filters {
+	_ = r.ParseForm()
+	return filters{
+		Kind:   strings.TrimSpace(r.Form.Get("kind")),
+		Status: strings.TrimSpace(r.Form.Get("status")),
+	}
+}
+
+// counts summarises the feedback pool for the /dev header.
+type counts struct {
+	Total   int
+	New     int
+	Triaged int
+	ByKind  map[string]int
+}
+
+func computeCounts(fb []model.Feedback) counts {
+	c := counts{ByKind: map[string]int{}}
+	for _, f := range fb {
+		c.Total++
+		if f.Status == "" || f.Status == "new" {
+			c.New++
+		} else {
+			c.Triaged++
+		}
+		c.ByKind[f.Kind]++
+	}
+	return c
+}
+
+// backlogView adds the display-only score bar percentage to a backlog item.
+type backlogView struct {
+	model.BacklogItem
+	ScorePct float64
+}
+
+func toBacklogView(items []model.BacklogItem) []backlogView {
+	max := 0.0
+	for _, it := range items {
+		if it.Score > max {
+			max = it.Score
+		}
+	}
+	out := make([]backlogView, len(items))
+	for i, it := range items {
+		pct := 0.0
+		if max > 0 {
+			pct = it.Score / max * 100
+		}
+		out[i] = backlogView{BacklogItem: it, ScorePct: pct}
+	}
+	return out
+}
+
+func filterBacklog(items []model.BacklogItem, f filters) []model.BacklogItem {
+	if f.Kind == "" && f.Status == "" {
+		return items
+	}
+	out := make([]model.BacklogItem, 0, len(items))
+	for _, it := range items {
+		if f.Kind != "" && !strings.EqualFold(it.Kind, f.Kind) {
+			continue
+		}
+		if f.Status != "" && !strings.EqualFold(it.Status, f.Status) {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+func filterFeedback(items []model.Feedback, f filters) []model.Feedback {
+	if f.Kind == "" {
+		return items
+	}
+	out := make([]model.Feedback, 0, len(items))
+	for _, it := range items {
+		if !strings.EqualFold(it.Kind, f.Kind) {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 type devView struct {
 	Generated string
 	Model     string
 	Version   string
+	Filters   filters
+	Counts    counts
 	Feedback  []model.Feedback
-	Backlog   []model.BacklogItem
+	Backlog   []backlogView
+	LastRun   string
+	LastError string
+	Interval  string
 }
 
-func (h *Handler) view(ctx context.Context) (devView, error) {
-	fb, err := h.deps.Store.ListFeedback(ctx, store.FeedbackFilter{Limit: 200})
+func (h *Handler) view(ctx context.Context, f filters) (devView, error) {
+	all, err := h.deps.Store.ListFeedback(ctx, store.FeedbackFilter{})
+	if err != nil {
+		return devView{}, err
+	}
+	recent, err := h.deps.Store.ListFeedback(ctx, store.FeedbackFilter{Limit: 200})
 	if err != nil {
 		return devView{}, err
 	}
@@ -57,17 +167,32 @@ func (h *Handler) view(ctx context.Context) (devView, error) {
 	if err != nil {
 		return devView{}, err
 	}
+
+	lastRun := "never"
+	if t := LastRun(); !t.IsZero() {
+		lastRun = t.Format("02 Jan 2006 15:04:05")
+	}
+	lastErr := ""
+	if err := LastError(); err != nil {
+		lastErr = err.Error()
+	}
+
 	return devView{
 		Generated: time.Now().Format("02 Jan 2006 15:04"),
 		Model:     h.deps.LLMModel,
 		Version:   h.deps.Version,
-		Feedback:  fb,
-		Backlog:   bl,
+		Filters:   f,
+		Counts:    computeCounts(all),
+		Feedback:  filterFeedback(recent, f),
+		Backlog:   toBacklogView(filterBacklog(bl, f)),
+		LastRun:   lastRun,
+		LastError: lastErr,
+		Interval:  backlogInterval().String(),
 	}, nil
 }
 
 func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
-	v, err := h.view(r.Context())
+	v, err := h.view(r.Context(), filtersFromRequest(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -76,20 +201,64 @@ func (h *Handler) page(w http.ResponseWriter, r *http.Request) {
 	_ = h.tpl.ExecuteTemplate(w, "dev", v)
 }
 
-// refresh regenerates the backlog from the current feedback.
-func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if _, err := Regenerate(ctx, h.deps); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	v, err := h.view(ctx)
+// filter re-renders the workspace body for a kind/status change.
+func (h *Handler) filter(w http.ResponseWriter, r *http.Request) {
+	v, err := h.view(r.Context(), filtersFromRequest(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = h.tpl.ExecuteTemplate(w, "backlog", v)
+	_ = h.tpl.ExecuteTemplate(w, "workspace", v)
+}
+
+// refresh regenerates the backlog from the current feedback.
+func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	f := filtersFromRequest(r)
+	if _, err := regenerateGuarded(ctx, h.deps); err != nil && !errors.Is(err, errRegenInProgress) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	v, err := h.view(ctx, f)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = h.tpl.ExecuteTemplate(w, "workspace", v)
+}
+
+// setStatus accepts/rejects/ships a backlog item.
+func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	f := filtersFromRequest(r)
+	status := strings.ToLower(strings.TrimSpace(r.Form.Get("status")))
+	switch status {
+	case "accepted", "rejected", "shipped", "proposed":
+	default:
+		http.Error(w, "invalid status", http.StatusBadRequest)
+		return
+	}
+	if err := h.deps.Store.SetBacklogStatus(r.Context(), id, status); err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			code = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), code)
+		return
+	}
+	v, err := h.view(r.Context(), f)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = h.tpl.ExecuteTemplate(w, "workspace", v)
 }
 
 func (h *Handler) backlogJSON(w http.ResponseWriter, r *http.Request) {
@@ -102,70 +271,103 @@ func (h *Handler) backlogJSON(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(items)
 }
 
-// Regenerate clusters all feedback into ranked backlog items and stores them.
-// The baseline groups by theme (or kind when no theme is set) and ranks by
-// frequency times average severity.
-func Regenerate(ctx context.Context, deps app.Deps) ([]model.BacklogItem, error) {
-	fb, err := deps.Store.ListFeedback(ctx, store.FeedbackFilter{Limit: 500})
-	if err != nil {
-		return nil, err
-	}
-	groups := map[string][]model.Feedback{}
-	for _, f := range fb {
-		key := strings.ToLower(strings.TrimSpace(f.Theme))
-		if key == "" {
-			key = strings.ToLower(f.Kind)
-		}
-		if key == "" {
-			key = "unsorted"
-		}
-		groups[key] = append(groups[key], f)
-	}
-	items := make([]model.BacklogItem, 0, len(groups))
-	for key, group := range groups {
-		sum := 0
-		evidence := make([]string, 0, len(group))
-		for _, f := range group {
-			sev := f.Severity
-			if sev == 0 {
-				sev = 3
-			}
-			sum += sev
-			if len(evidence) < 5 {
-				evidence = append(evidence, f.Verbatim)
-			}
-		}
-		avg := float64(sum) / float64(len(group))
-		items = append(items, model.BacklogItem{
-			Title:       strings.ToUpper(key[:1]) + key[1:],
-			Rationale:   "Grouped from " + itoa(len(group)) + " pieces of user feedback.",
-			Theme:       key,
-			Kind:        group[0].Kind,
-			Count:       len(group),
-			AvgSeverity: avg,
-			Score:       float64(len(group)) * avg,
-			Evidence:    evidence,
-			Status:      "proposed",
-			UpdatedAt:   time.Now(),
-		})
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Score > items[j].Score })
-	if err := deps.Store.ReplaceBacklog(ctx, items); err != nil {
-		return nil, err
-	}
-	return items, nil
+// --- regeneration state: last run time / error, and an overlap guard -------
+
+var (
+	stateMu      sync.Mutex
+	regenRunning bool
+	lastRunAt    time.Time
+	lastRunErr   error
+)
+
+var errRegenInProgress = errors.New("devloop: regeneration already in progress")
+
+// LastRun returns when Regenerate last finished (zero if it never ran).
+func LastRun() time.Time {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return lastRunAt
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// LastError returns the error from the last regeneration, if any.
+func LastError() error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return lastRunErr
+}
+
+// regenerateGuarded runs Regenerate, refusing to overlap a run already in
+// flight and recording the outcome for LastRun/LastError.
+func regenerateGuarded(ctx context.Context, deps app.Deps) ([]model.BacklogItem, error) {
+	stateMu.Lock()
+	if regenRunning {
+		stateMu.Unlock()
+		return nil, errRegenInProgress
 	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
+	regenRunning = true
+	stateMu.Unlock()
+
+	items, err := Regenerate(ctx, deps)
+
+	stateMu.Lock()
+	regenRunning = false
+	lastRunAt = time.Now()
+	lastRunErr = err
+	stateMu.Unlock()
+
+	return items, err
+}
+
+// --- background refresh -----------------------------------------------------
+
+// Start regenerates the backlog on a fixed interval (BACKLOG_INTERVAL, default
+// 15m, "0" disables) until ctx is cancelled or the returned stop func is
+// called. Wire it from main.go with:
+//
+//	stop := devloop.Start(ctx, deps)
+//	defer stop()
+func Start(ctx context.Context, deps app.Deps) func() {
+	interval := backlogInterval()
+	ctx, cancel := context.WithCancel(ctx)
+	if interval <= 0 {
+		return cancel
 	}
-	return string(b[i:])
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := regenerateGuarded(ctx, deps); err != nil && !errors.Is(err, errRegenInProgress) {
+					log.Printf("devloop: background regeneration failed: %v", err)
+				}
+			}
+		}
+	}()
+	return cancel
+}
+
+func backlogInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("BACKLOG_INTERVAL"))
+	if raw == "" {
+		return 15 * time.Minute
+	}
+	if raw == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("devloop: bad BACKLOG_INTERVAL %q, using 15m", raw)
+		return 15 * time.Minute
+	}
+	return d
+}
+
+func backlogPath() string {
+	if v := strings.TrimSpace(os.Getenv("BACKLOG_PATH")); v != "" {
+		return v
+	}
+	return "docs/backlog.md"
 }
