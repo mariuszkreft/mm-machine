@@ -231,7 +231,7 @@ func (m *Memory) ReplaceBacklog(_ context.Context, items []model.BacklogItem) er
 func (m *Memory) ListBacklog(context.Context) ([]model.BacklogItem, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := append([]model.BacklogItem(nil), m.backlog...)
+	out := append([]model.BacklogItem{}, m.backlog...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out, nil
 }

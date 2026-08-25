@@ -1,6 +1,39 @@
 /* Development-loop surface. */
 body.dev { background: var(--paper); }
 
+.counts-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.count-tile {
+  display: grid;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  min-width: 88px;
+}
+.count-tile strong { font-size: 20px; }
+.count-tile span { color: var(--muted); font-size: 12px; }
+
+.filter-bar { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; margin: 12px 0 20px; }
+.filter-bar label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.filter-bar select {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.dev-error {
+  margin: 8px 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--red);
+  border-radius: 10px;
+  background: rgba(220, 38, 38, .08);
+  color: var(--red);
+  font-size: 13px;
+}
+
 .backlog { display: grid; gap: 12px; margin: 16px 0 32px; }
 
 .backlog-item {
@@ -16,6 +49,40 @@ body.dev { background: var(--paper); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--violet);
 }
+
+.status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, .12);
+  color: var(--muted);
+}
+.status-accepted { background: rgba(37, 99, 235, .12); color: var(--blue); }
+.status-shipped { background: rgba(22, 163, 74, .12); color: var(--green); }
+.status-rejected { background: rgba(220, 38, 38, .12); color: var(--red); }
+
+.score-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(109, 40, 217, .12);
+  margin: 8px 0;
+  overflow: hidden;
+}
+.score-bar span { display: block; height: 100%; background: var(--violet); border-radius: 999px; }
+
+.backlog-actions { display: flex; gap: 8px; margin-top: 10px; }
+.backlog-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.backlog-actions button:hover { border-color: var(--violet); color: var(--violet); }
 
 .backlog-item ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
 .backlog-item .meta, .feedback-item .meta { color: var(--muted); font-size: 12px; }

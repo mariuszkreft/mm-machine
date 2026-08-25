@@ -9,7 +9,7 @@ const pageHTML = `<!doctype html>
   <title>Montage Manager</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=4">
   <link rel="stylesheet" href="/static/assistant.css?v=1">
 </head>
 <body>
@@ -167,6 +167,14 @@ const offersHTML = `{{define "offers"}}<div id="offers" class="offers" aria-live
     <div class="offer-foot">
       <span>{{.Signal}}</span>
       <span>Updated {{.Updated}}</span>
+    </div>
+    <div class="offer-actions" hx-target="#offers" hx-swap="outerHTML">
+      {{$id := .ID}}{{$cur := lower .Status}}
+      {{range $next := $.Statuses}}
+        {{if ne $next $cur}}
+        <button hx-post="/offers/status" hx-vals='{"id": "{{$id}}", "status": "{{$next}}", "view": "{{$.View}}", "role": "{{$.Role}}", "q": "{{$.Query}}"}'>{{$next}}</button>
+        {{end}}
+      {{end}}
     </div>
   </article>
   {{else}}

@@ -54,6 +54,13 @@ func main() {
 	assistant.Register(mux, deps)
 	devloop.Register(mux, deps)
 
+	// The dev loop re-clusters feedback into the backlog on an interval
+	// (BACKLOG_INTERVAL, 0 disables).
+	ctx, stopLoop := context.WithCancel(context.Background())
+	defer stopLoop()
+	stop := devloop.Start(ctx, deps)
+	defer stop()
+
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8080"),
 		Handler:           withSecurityHeaders(mux),

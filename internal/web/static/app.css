@@ -663,3 +663,27 @@ blockquote {
   }
   .panel-head strong { display: none; }
 }
+
+/* Per-offer status transitions. */
+.offer-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.offer-actions button {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.offer-actions button:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
