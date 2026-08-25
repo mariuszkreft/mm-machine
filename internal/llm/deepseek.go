@@ -3,15 +3,18 @@
 // The served model (deepseek-v4-flash-0731) puts its chain of thought in a
 // separate "reasoning" field and spends ~33 tokens on it before emitting any
 // content, so short max_tokens values come back with content:null and
-// finish_reason:"length". DefaultMaxTokens guards against that.
+// finish_reason:"length". DefaultMaxTokens guards against that; ErrEmptyAnswer
+// is the sentinel for when a caller's own MaxTokens still isn't enough.
 package llm
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -25,6 +28,14 @@ const (
 	DefaultModel = "deepseek-v4-flash-0731"
 	// DefaultMaxTokens must stay well above the model's hidden preamble.
 	DefaultMaxTokens = 1024
+
+	maxAttempts   = 3
+	baseBackoff   = 200 * time.Millisecond
+	maxBackoffCap = 2 * time.Second
+
+	defaultChatTimeout   = 60 * time.Second
+	defaultStreamTimeout = 180 * time.Second
+	defaultHealthTimeout = 20 * time.Second
 )
 
 type client struct {
@@ -48,7 +59,10 @@ func New(cfg Config) Client {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = DefaultMaxTokens
 	}
-	return &client{cfg: cfg, http: &http.Client{Timeout: 180 * time.Second}}
+	// No client-wide Timeout: request lifetime is governed by per-call
+	// context deadlines (see ensureDeadline) so long-lived streams aren't
+	// cut off by a blanket transport timeout.
+	return &client{cfg: cfg, http: &http.Client{}}
 }
 
 func (c *client) Model() string { return c.cfg.Model }
@@ -102,7 +116,64 @@ func (c *client) body(req Request, stream bool) chatRequest {
 	}
 }
 
-func (c *client) post(ctx context.Context, body any, stream bool) (*http.Response, error) {
+// ensureDeadline layers a default timeout onto ctx if the caller didn't
+// already set one, so a single attempt can never hang forever.
+func ensureDeadline(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
+// backoffDuration returns a capped exponential delay with jitter for the
+// given attempt (1-based).
+func backoffDuration(attempt int) time.Duration {
+	d := baseBackoff * time.Duration(1<<uint(attempt-1))
+	if d > maxBackoffCap {
+		d = maxBackoffCap
+	}
+	jitter := time.Duration(rand.Int63n(int64(d)/2 + 1))
+	return d/2 + jitter
+}
+
+// sleepBackoff waits out the backoff for attempt, or returns false early if
+// ctx is done.
+func sleepBackoff(ctx context.Context, attempt int) bool {
+	t := time.NewTimer(backoffDuration(attempt))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// isRetryable reports whether err is worth another attempt: connection
+// failures, timeouts and 5xx responses are; caller aborts, empty-answer and
+// 4xx client errors are not.
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ca *callerAbort
+	if errors.As(err, &ca) {
+		return false
+	}
+	if errors.Is(err, ErrEmptyAnswer) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.Status >= 500
+	}
+	return true // network errors, timeouts, mid-stream EOF, decode errors
+}
+
+func (c *client) post(ctx context.Context, body chatRequest) (*http.Response, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -113,38 +184,64 @@ func (c *client) post(ctx context.Context, body any, stream bool) (*http.Respons
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	if stream {
+	if body.Stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("llm: %s [%s]: %w", c.cfg.BaseURL, c.cfg.Model, err)
 	}
 	if resp.StatusCode >= 400 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
-		return nil, fmt.Errorf("llm: %s: %s", resp.Status, strings.TrimSpace(string(snippet)))
+		return nil, &statusError{Endpoint: c.cfg.BaseURL, Model: c.cfg.Model, Status: resp.StatusCode, Snippet: strings.TrimSpace(string(snippet))}
 	}
 	return resp, nil
 }
 
+// Chat blocks until the whole answer is ready, retrying idempotent failures
+// (connection errors, timeouts, 5xx) up to maxAttempts with capped
+// exponential backoff and jitter.
 func (c *client) Chat(ctx context.Context, req Request) (Response, error) {
-	resp, err := c.post(ctx, c.body(req, false), false)
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err := c.chatOnce(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isRetryable(err) || attempt == maxAttempts {
+			return Response{}, err
+		}
+		if !sleepBackoff(ctx, attempt) {
+			return Response{}, ctx.Err()
+		}
+	}
+	return Response{}, lastErr
+}
+
+func (c *client) chatOnce(ctx context.Context, req Request) (Response, error) {
+	attemptCtx, cancel := ensureDeadline(ctx, defaultChatTimeout)
+	defer cancel()
+	resp, err := c.post(attemptCtx, c.body(req, false))
 	if err != nil {
 		return Response{}, err
 	}
 	defer resp.Body.Close()
 	var parsed chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return Response{}, fmt.Errorf("llm: decode: %w", err)
+		return Response{}, fmt.Errorf("llm: %s [%s]: decode: %w", c.cfg.BaseURL, c.cfg.Model, err)
 	}
 	if parsed.Error != nil {
-		return Response{}, fmt.Errorf("llm: %s", parsed.Error.Message)
+		return Response{}, fmt.Errorf("llm: %s [%s]: %s", c.cfg.BaseURL, c.cfg.Model, parsed.Error.Message)
 	}
 	if len(parsed.Choices) == 0 {
-		return Response{}, fmt.Errorf("llm: empty choices")
+		return Response{}, fmt.Errorf("llm: %s [%s]: empty choices", c.cfg.BaseURL, c.cfg.Model)
 	}
 	ch := parsed.Choices[0]
+	if ch.Message.Content == "" && ch.FinishReason == "length" {
+		return Response{}, newEmptyAnswerErr(c.cfg.BaseURL, c.cfg.Model)
+	}
 	return Response{
 		Content:      ch.Message.Content,
 		Reasoning:    ch.Message.Reasoning,
@@ -153,113 +250,177 @@ func (c *client) Chat(ctx context.Context, req Request) (Response, error) {
 	}, nil
 }
 
-// Stream is a minimal SSE reader; it degrades to a single Delta when the
-// endpoint answers without streaming.
+// callFn invokes fn and, on error, marks it as a caller abort so the retry
+// loop never retries after the caller has already asked to stop.
+func callFn(fn func(Delta) error, d Delta) error {
+	if err := fn(d); err != nil {
+		return &callerAbort{err}
+	}
+	return nil
+}
+
+// Stream calls fn for every chunk, retrying idempotent connection failures
+// (refused connections, 5xx, EOF before any content) up to maxAttempts —
+// but never once a content delta has reached the caller, since that data
+// can't be un-delivered. If the server ignores stream:true and answers as a
+// normal completion, Stream falls back to emitting the whole answer as one
+// delta instead of failing.
 func (c *client) Stream(ctx context.Context, req Request, fn func(Delta) error) error {
-	resp, err := c.post(ctx, c.body(req, true), true)
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		delivered, err := c.streamOnce(ctx, req, fn)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if delivered || !isRetryable(err) || attempt == maxAttempts {
+			return err
+		}
+		if !sleepBackoff(ctx, attempt) {
+			return ctx.Err()
+		}
+	}
+	return lastErr
+}
+
+// streamOnce makes a single attempt. It reports whether any content delta
+// reached fn, so the caller knows whether a retry is still safe.
+func (c *client) streamOnce(ctx context.Context, req Request, fn func(Delta) error) (delivered bool, err error) {
+	attemptCtx, cancel := ensureDeadline(ctx, defaultStreamTimeout)
+	defer cancel()
+	resp, err := c.post(attemptCtx, c.body(req, true))
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
+
+	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return c.streamFallback(resp, fn)
+	}
+
 	dec := newSSEReader(resp.Body)
 	for {
 		payload, err := dec.next()
 		if err == io.EOF {
-			return fn(Delta{Done: true})
+			return delivered, callFn(fn, Delta{Done: true})
 		}
 		if err != nil {
-			return err
+			return delivered, fmt.Errorf("llm: %s [%s]: stream read: %w", c.cfg.BaseURL, c.cfg.Model, err)
 		}
 		if payload == "[DONE]" {
-			return fn(Delta{Done: true})
+			return delivered, callFn(fn, Delta{Done: true})
 		}
 		var parsed chatResponse
-		if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-			continue
-		}
-		if len(parsed.Choices) == 0 {
+		if json.Unmarshal([]byte(payload), &parsed) != nil || len(parsed.Choices) == 0 {
 			continue
 		}
 		d := parsed.Choices[0].Delta
 		if d.Content == "" && d.Reasoning == "" {
 			continue
 		}
-		if err := fn(Delta{Content: d.Content, Reasoning: d.Reasoning}); err != nil {
-			return err
+		if d.Content != "" {
+			delivered = true
+		}
+		if err := callFn(fn, Delta{Content: d.Content, Reasoning: d.Reasoning}); err != nil {
+			return delivered, err
 		}
 	}
+}
+
+// streamFallback handles a server that answered a stream:true request as a
+// normal, non-SSE completion: it decodes the whole body and emits it as a
+// single delta rather than failing.
+func (c *client) streamFallback(resp *http.Response, fn func(Delta) error) (bool, error) {
+	var parsed chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return false, fmt.Errorf("llm: %s [%s]: decode: %w", c.cfg.BaseURL, c.cfg.Model, err)
+	}
+	if len(parsed.Choices) == 0 {
+		return false, fmt.Errorf("llm: %s [%s]: empty choices", c.cfg.BaseURL, c.cfg.Model)
+	}
+	ch := parsed.Choices[0]
+	if ch.Message.Content == "" && ch.FinishReason == "length" {
+		return false, newEmptyAnswerErr(c.cfg.BaseURL, c.cfg.Model)
+	}
+	if err := callFn(fn, Delta{Content: ch.Message.Content, Reasoning: ch.Message.Reasoning}); err != nil {
+		return false, err
+	}
+	if err := callFn(fn, Delta{Done: true}); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // JSON asks for strict JSON and tolerates fenced or prose-wrapped answers.
+// If the first answer doesn't contain parseable JSON, it retries once with
+// a stricter instruction before giving up.
 func (c *client) JSON(ctx context.Context, req Request, schemaHint string, out any) error {
-	msgs := append([]Message(nil), req.Messages...)
-	msgs = append(msgs, Message{
-		Role:    "system",
-		Content: "Answer with a single JSON value and nothing else. No prose, no code fence. Shape:\n" + schemaHint,
-	})
-	req.Messages = msgs
-	resp, err := c.Chat(ctx, req)
+	resp, err := c.askJSON(ctx, req, schemaHint, false)
+	if err != nil {
+		return err // network/API failure already retried inside Chat
+	}
+	if raw := ExtractJSON(resp.Content); raw != "" {
+		if json.Unmarshal([]byte(raw), out) == nil {
+			return nil
+		}
+	}
+
+	resp2, err := c.askJSON(ctx, req, schemaHint, true)
 	if err != nil {
 		return err
 	}
-	raw := ExtractJSON(resp.Content)
-	if raw == "" {
-		return fmt.Errorf("llm: no JSON in answer (finish_reason=%s)", resp.FinishReason)
+	raw2 := ExtractJSON(resp2.Content)
+	if raw2 == "" {
+		return fmt.Errorf("llm: %s [%s]: no JSON in answer after retry (finish_reason=%s)", c.cfg.BaseURL, c.cfg.Model, resp2.FinishReason)
 	}
-	return json.Unmarshal([]byte(raw), out)
+	if err := json.Unmarshal([]byte(raw2), out); err != nil {
+		return fmt.Errorf("llm: %s [%s]: answer is not valid JSON after retry (finish_reason=%s): %w", c.cfg.BaseURL, c.cfg.Model, resp2.FinishReason, err)
+	}
+	return nil
 }
 
-// ExtractJSON pulls the first balanced JSON object or array out of s.
-func ExtractJSON(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.Index(s, "```"); i >= 0 {
-		rest := s[i+3:]
-		if j := strings.Index(rest, "\n"); j >= 0 {
-			rest = rest[j+1:]
-		}
-		if j := strings.Index(rest, "```"); j >= 0 {
-			rest = rest[:j]
-		}
-		s = strings.TrimSpace(rest)
+func (c *client) askJSON(ctx context.Context, req Request, schemaHint string, strict bool) (Response, error) {
+	instruction := "Answer with a single JSON value and nothing else. No prose, no code fence. Shape:\n" + schemaHint
+	if strict {
+		instruction = "Your previous answer was not valid JSON. Respond again with ONLY one JSON value: no prose, no explanation, no markdown code fences, nothing before or after it. Shape:\n" + schemaHint
 	}
-	start := strings.IndexAny(s, "{[")
-	if start < 0 {
-		return ""
-	}
-	open := s[start]
-	close := byte('}')
-	if open == '[' {
-		close = ']'
-	}
-	depth, inStr, esc := 0, false, false
-	for i := start; i < len(s); i++ {
-		ch := s[i]
-		switch {
-		case esc:
-			esc = false
-		case ch == '\\' && inStr:
-			esc = true
-		case ch == '"':
-			inStr = !inStr
-		case inStr:
-		case ch == open:
-			depth++
-		case ch == close:
-			depth--
-			if depth == 0 {
-				return s[start : i+1]
-			}
-		}
-	}
-	return ""
+	msgs := append([]Message(nil), req.Messages...)
+	msgs = append(msgs, Message{Role: "system", Content: instruction})
+	r2 := req
+	r2.Messages = msgs
+	return c.Chat(ctx, r2)
 }
 
+// Health hits /models when the endpoint offers it, falling back to a tiny
+// chat completion for servers that don't.
 func (c *client) Health(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := ensureDeadline(ctx, defaultHealthTimeout)
 	defer cancel()
+	if err := c.pingModels(ctx); err == nil {
+		return nil
+	}
 	_, err := c.Chat(ctx, Request{
 		Messages:  []Message{{Role: "user", Content: "ping"}},
 		MaxTokens: 512,
 	})
 	return err
+}
+
+func (c *client) pingModels(ctx context.Context) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.BaseURL+"/models", nil)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return &statusError{Endpoint: c.cfg.BaseURL, Model: c.cfg.Model, Status: resp.StatusCode, Snippet: strings.TrimSpace(string(snippet))}
+	}
+	io.Copy(io.Discard, resp.Body)
+	return nil
 }
