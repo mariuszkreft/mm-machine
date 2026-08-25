@@ -10,3 +10,5 @@ docker run --rm -p 8080:8080 mm-machine
 ```
 
 Open `http://localhost:8080`.
+
+Production: `https://mm.m-2.cc`.
