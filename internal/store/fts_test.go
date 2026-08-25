@@ -123,8 +123,15 @@ func TestFTSCompoundDachmontage(t *testing.T) {
 	if len(hits) == 0 {
 		t.Fatalf("expected hits for Dachmontage")
 	}
-	if hits[0].ID != "MM-2101" {
-		t.Fatalf("expected the literal Dachmontage title to rank first, got order %v", hitIDs(hits))
+	// Two rows carry the literal compound in their title (the legacy seed row
+	// and the demo one); either may rank first, but a row that only contains
+	// the parts must not outrank them.
+	literal := map[string]bool{"MM-2101": true, "MM-1842": true}
+	if !literal[hits[0].ID] {
+		t.Fatalf("expected a literal Dachmontage title to rank first, got order %v", hitIDs(hits))
+	}
+	if len(hits) > 1 && !literal[hits[1].ID] {
+		t.Fatalf("expected both literal Dachmontage titles on top, got order %v", hitIDs(hits))
 	}
 	if !containsID(hits, "MM-2109") {
 		t.Fatalf("expected decompounded 'Montage' to find MM-2109 (Stahltreppen Montage Parkhaus), got %v", hitIDs(hits))

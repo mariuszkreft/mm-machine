@@ -77,6 +77,35 @@ var numberedMigrations = []struct {
 	{3, backfillOfferFacets},
 	{4, dedupeAndIndexSavedSearches},
 	{5, buildFullTextIndex},
+	{6, germaniseLegacySeedOffers},
+}
+
+// germaniseLegacySeedOffers rewrites the four original English seed rows on an
+// existing installation. The app is German-first now, and a German market with
+// four English rows in it reads as a bug. Rows an operator has already edited
+// are left alone: the update only fires when the title still matches the
+// English original.
+func germaniseLegacySeedOffers(tx *sql.Tx) error {
+	replacements := []struct {
+		id, oldTitle string
+		offer        model.Offer
+	}{
+		{"MM-1842", "Photovoltaic roof installation", SeedOffers()[0]},
+		{"MM-1841", "Retail floor refit", SeedOffers()[1]},
+		{"MM-1838", "Warehouse steel assembly", SeedOffers()[2]},
+		{"MM-1832", "Hotel bathroom modernization", SeedOffers()[3]},
+	}
+	for _, r := range replacements {
+		if _, err := tx.Exec(`
+UPDATE offers
+   SET title = ?, location = ?, category = ?, amount = ?, attention = ?
+ WHERE id = ? AND title = ?`,
+			r.offer.Title, r.offer.Location, r.offer.Category, r.offer.Amount, r.offer.Attention,
+			r.id, r.oldTitle); err != nil {
+			return fmt.Errorf("germanise %s: %w", r.id, err)
+		}
+	}
+	return nil
 }
 
 func (s *SQLite) migrate() error {

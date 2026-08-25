@@ -97,12 +97,14 @@ func TestOfferFiltering(t *testing.T) {
 		t.Fatalf("expected at least one open offer")
 	}
 
-	byQuery, err := s.ListOffers(ctx, OfferFilter{Query: "munich"})
+	// The seed is German, so the substring filter is exercised with the German
+	// spelling; cross-language matching is TextSearch's job, not this filter's.
+	byQuery, err := s.ListOffers(ctx, OfferFilter{Query: "münchen"})
 	if err != nil {
 		t.Fatalf("ListOffers query: %v", err)
 	}
 	if len(byQuery) != 1 || byQuery[0].ID != "MM-1842" {
-		t.Fatalf("expected MM-1842 for query munich, got %+v", byQuery)
+		t.Fatalf("expected MM-1842 for query münchen, got %+v", byQuery)
 	}
 
 	limited, err := s.ListOffers(ctx, OfferFilter{Limit: 1})
