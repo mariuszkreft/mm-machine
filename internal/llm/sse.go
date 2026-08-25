@@ -7,6 +7,9 @@ import (
 )
 
 // sseReader yields the payload of each `data:` line of a text/event-stream.
+// bufio.Scanner buffers internally, so chunks split across reads (or split
+// mid-line by the network) are reassembled transparently; blank keep-alive
+// lines and any other non-`data:` line are skipped.
 type sseReader struct{ sc *bufio.Scanner }
 
 func newSSEReader(r io.Reader) *sseReader {
