@@ -7,7 +7,7 @@ const devHTML = `{{define "dev"}}<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Montage Manager · dev loop</title>
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=4">
   <link rel="stylesheet" href="/static/dev.css?v=2">
 </head>
 <body class="dev">

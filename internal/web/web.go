@@ -35,6 +35,8 @@ type Dashboard struct {
 	Perspectives []model.Perspective
 	Modules      []model.Module
 	Roadmap      []model.RoadmapItem
+	// Statuses drives the per-offer status buttons.
+	Statuses []string
 }
 
 // Handler serves the public surface.
@@ -61,6 +63,7 @@ func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 	mux.HandleFunc("/offers", h.offers)
 	mux.HandleFunc("/perspective", h.perspective)
 	mux.HandleFunc("/offers/new", h.createOffer)
+	mux.HandleFunc("/offers/status", h.advanceOffer)
 	return h
 }
 
@@ -136,6 +139,46 @@ func (h *Handler) createOffer(w http.ResponseWriter, r *http.Request) {
 	h.renderPartial(w, r, "offers")
 }
 
+// advanceOffer moves one offer to another pipeline status and re-renders the
+// pipeline. It is the minimum write path an operator needs: an offer that can
+// only be created is not a pipeline.
+func (h *Handler) advanceOffer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id := strings.TrimSpace(r.FormValue("id"))
+	status := strings.ToLower(strings.TrimSpace(r.FormValue("status")))
+	if !validStatus[status] {
+		http.Error(w, "unknown status", http.StatusBadRequest)
+		return
+	}
+	offer, err := h.deps.Store.GetOffer(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	offer.Status = status
+	switch status {
+	case "done":
+		offer.Progress = 100
+		offer.Signal = "Review"
+	case "open":
+		offer.Signal = "OK"
+	}
+	if _, err := h.deps.Store.UpdateOffer(r.Context(), offer); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.renderPartial(w, r, "offers")
+}
+
+var validStatus = map[string]bool{"open": true, "requested": true, "process": true, "done": true}
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {
@@ -199,6 +242,7 @@ func (h *Handler) dashboard(r *http.Request) (Dashboard, error) {
 		Perspectives: perspectives,
 		Modules:      modules,
 		Roadmap:      roadmap,
+		Statuses:     []string{"open", "requested", "process", "done"},
 	}, nil
 }
 
