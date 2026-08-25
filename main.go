@@ -125,9 +125,9 @@ func dashboard(r *http.Request) Dashboard {
 
 func seedOffers() []Offer {
 	return []Offer{
-		{ID: "MM-1842", Title: "Photovoltaic roof installation", Location: "Munich, DE", Category: "Energy", Amount: "420 panels", Budget: "EUR 146k", Status: "process", Signal: "Attention", Supplier: "Voltwerk GmbH", Updated: "12 min", Progress: 68, Attention: "3 requests need document expiry checks"},
-		{ID: "MM-1841", Title: "Retail floor refit", Location: "Zurich, CH", Category: "Interior", Amount: "1,800 m2", Budget: "EUR 82k", Status: "requested", Signal: "OK", Supplier: "Alpine Montage", Updated: "38 min", Progress: 36, Attention: "5 supplier answers ready"},
-		{ID: "MM-1838", Title: "Warehouse steel assembly", Location: "Rotterdam, NL", Category: "Industrial", Amount: "96 tons", Budget: "EUR 310k", Status: "open", Signal: "OK", Supplier: "Nordline Build", Updated: "1 h", Progress: 22, Attention: "Hardware list confirmed"},
+		{ID: "MM-1842", Title: "Photovoltaic roof installation", Location: "Munich, DE", Category: "Energy", Amount: "420 panels", Budget: "EUR 146k", Status: "process", Signal: "Attention", Supplier: "Voltwerk GmbH", Updated: "12 min ago", Progress: 68, Attention: "3 requests need document expiry checks"},
+		{ID: "MM-1841", Title: "Retail floor refit", Location: "Zurich, CH", Category: "Interior", Amount: "1,800 m2", Budget: "EUR 82k", Status: "requested", Signal: "OK", Supplier: "Alpine Montage", Updated: "38 min ago", Progress: 36, Attention: "5 supplier answers ready"},
+		{ID: "MM-1838", Title: "Warehouse steel assembly", Location: "Rotterdam, NL", Category: "Industrial", Amount: "96 tons", Budget: "EUR 310k", Status: "open", Signal: "OK", Supplier: "Nordline Build", Updated: "1 h ago", Progress: 22, Attention: "Hardware list confirmed"},
 		{ID: "MM-1832", Title: "Hotel bathroom modernization", Location: "Vienna, AT", Category: "Sanitary", Amount: "74 rooms", Budget: "EUR 228k", Status: "done", Signal: "Review", Supplier: "Prime Install", Updated: "Yesterday", Progress: 100, Attention: "Review window open"},
 	}
 }
@@ -272,7 +272,7 @@ const offersHTML = `{{define "offers"}}<div id="offers" class="offers" aria-live
     <div class="progress"><i style="width: {{.Progress}}%"></i></div>
     <div class="offer-foot">
       <span>{{.Signal}}</span>
-      <span>Updated {{.Updated}} ago</span>
+      <span>Updated {{.Updated}}</span>
     </div>
   </article>
   {{else}}
