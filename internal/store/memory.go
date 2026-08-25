@@ -277,15 +277,55 @@ func (m *Memory) GetProfile(_ context.Context, id string) (model.Profile, error)
 	return p, nil
 }
 
+// savedSearchCap mirrors the SQLite backend: a profile keeps only its newest
+// 50 saved searches, and saving an identical query again updates the
+// existing row (bumping it to newest) instead of duplicating it.
+const savedSearchCap = 50
+
 func (m *Memory) SaveSearch(_ context.Context, s model.SavedSearch) (model.SavedSearch, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s.ID = m.id()
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now()
 	}
+	for i, existing := range m.searches {
+		if existing.ProfileID == s.ProfileID && existing.Query == s.Query {
+			s.ID = existing.ID
+			m.searches[i] = s
+			m.capSearches(s.ProfileID)
+			return s, nil
+		}
+	}
+	s.ID = m.id()
 	m.searches = append(m.searches, s)
+	m.capSearches(s.ProfileID)
 	return s, nil
+}
+
+// capSearches drops the oldest saved searches for a profile beyond
+// savedSearchCap. Caller holds m.mu.
+func (m *Memory) capSearches(profileID string) {
+	idx := make([]int, 0, len(m.searches))
+	for i, s := range m.searches {
+		if s.ProfileID == profileID {
+			idx = append(idx, i)
+		}
+	}
+	if len(idx) <= savedSearchCap {
+		return
+	}
+	sort.Slice(idx, func(a, b int) bool { return m.searches[idx[a]].CreatedAt.After(m.searches[idx[b]].CreatedAt) })
+	keep := map[int]bool{}
+	for _, i := range idx[:savedSearchCap] {
+		keep[i] = true
+	}
+	out := m.searches[:0]
+	for i, s := range m.searches {
+		if s.ProfileID != profileID || keep[i] {
+			out = append(out, s)
+		}
+	}
+	m.searches = out
 }
 
 func (m *Memory) ListSavedSearches(_ context.Context, profileID string) ([]model.SavedSearch, error) {

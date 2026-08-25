@@ -64,6 +64,20 @@ func Open(path string) (Store, error) {
 	return s, nil
 }
 
+// numberedMigrations upgrade a database created by an older schema.sql.
+// schema.sql itself only ever grows tables that did not exist yet (CREATE
+// TABLE/INDEX IF NOT EXISTS is safe on any database); a column added to an
+// existing table needs an explicit ALTER, guarded here by schema_migrations
+// so it runs exactly once, on fresh and pre-existing databases alike.
+var numberedMigrations = []struct {
+	version int
+	apply   func(*sql.Tx) error
+}{
+	{2, addOfferFacetColumns},
+	{3, backfillOfferFacets},
+	{4, dedupeAndIndexSavedSearches},
+}
+
 func (s *SQLite) migrate() error {
 	for _, stmt := range strings.Split(schemaSQL, ";") {
 		stmt = strings.TrimSpace(stmt)
@@ -74,7 +88,145 @@ func (s *SQLite) migrate() error {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 	}
+	for _, m := range numberedMigrations {
+		if err := s.applyMigration(m.version, m.apply); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *SQLite) applyMigration(version int, apply func(*sql.Tx) error) error {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&n); err != nil {
+		return fmt.Errorf("store: migration %d check: %w", version, err)
+	}
+	if n > 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: migration %d: %w", version, err)
+	}
+	defer tx.Rollback()
+
+	if err := apply(tx); err != nil {
+		return fmt.Errorf("store: migration %d: %w", version, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+		return fmt.Errorf("store: migration %d: %w", version, err)
+	}
+	return tx.Commit()
+}
+
+// addOfferFacetColumns adds the normalized search facets to an offers table
+// that predates them.
+func addOfferFacetColumns(tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE offers ADD COLUMN trade TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE offers ADD COLUMN region TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE offers ADD COLUMN crew_size INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE offers ADD COLUMN start_at INTEGER`,
+		`ALTER TABLE offers ADD COLUMN requirements TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE offers ADD COLUMN languages TEXT NOT NULL DEFAULT '[]'`,
+		`CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_offers_trade ON offers(trade)`,
+		`CREATE INDEX IF NOT EXISTS idx_offers_category ON offers(category)`,
+		`CREATE INDEX IF NOT EXISTS idx_offers_region ON offers(region)`,
+		`CREATE INDEX IF NOT EXISTS idx_offers_crew_size ON offers(crew_size)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backfillOfferFacets fills the new columns on rows written before they
+// existed: rows whose id matches a seed offer get the seed's facets, every
+// other row derives trade from category and region from location.
+func backfillOfferFacets(tx *sql.Tx) error {
+	seedByID := map[string]model.Offer{}
+	for _, o := range SeedOffers() {
+		seedByID[o.ID] = o
+	}
+
+	rows, err := tx.Query(`SELECT id, category, location FROM offers`)
+	if err != nil {
+		return err
+	}
+	type row struct{ id, category, location string }
+	var pending []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.category, &r.location); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, r := range pending {
+		if seed, ok := seedByID[r.id]; ok {
+			_, err := tx.Exec(`UPDATE offers SET trade=?, region=?, crew_size=?, start_at=?, requirements=?, languages=? WHERE id=?`,
+				seed.Trade, seed.Region, seed.CrewSize, nullableUnix(seed.Start), encodeList(seed.Requirements), encodeList(seed.Languages), r.id)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE offers SET trade=?, region=? WHERE id=?`, r.category, r.location, r.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dedupeAndIndexSavedSearches collapses any duplicate (profile_id, query)
+// rows left over from before saved searches were deduplicated, keeping the
+// newest one, then enforces the constraint with a unique index so SaveSearch
+// can rely on ON CONFLICT.
+func dedupeAndIndexSavedSearches(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+DELETE FROM saved_searches
+WHERE id NOT IN (
+    SELECT MAX(id) FROM saved_searches GROUP BY profile_id, query
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_searches_dedup ON saved_searches(profile_id, query)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func encodeList(v []string) string {
+	if v == nil {
+		v = []string{}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodeList(raw string) []string {
+	var out []string
+	if raw == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func (s *SQLite) seed() error {
@@ -155,13 +307,25 @@ func nonZeroUnix(t time.Time) int64 {
 	return t.UTC().Unix()
 }
 
+// nullableUnix leaves a zero time as SQL NULL instead of substituting now,
+// so an offer without a known start date never gets a fabricated one.
+func nullableUnix(t time.Time) sql.NullInt64 {
+	if t.IsZero() {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: t.UTC().Unix(), Valid: true}
+}
+
 // --- Offers -----------------------------------------------------------
 
-// ListOffers answers the pipeline and search queries. Status and free text are
-// pushed into SQL; the facet fields are applied afterwards through the shared
-// MatchesFacets helper so both backends agree on the semantics.
+const offerColumns = `id, title, location, category, amount, budget, status, signal, supplier, progress, attention, trade, region, crew_size, start_at, requirements, languages, created_at, updated_at`
+
+// ListOffers answers the pipeline and search queries. Status, free text and
+// the facet fields (Statuses, Trades, Regions, Requirements, MinCrewSize) are
+// all pushed into SQL for indexed narrowing; MatchesFacets is then applied as
+// a final guard so the SQL path and the Go (Memory) path can never diverge.
 func (s *SQLite) ListOffers(ctx context.Context, f OfferFilter) ([]model.Offer, error) {
-	query := `SELECT id, title, location, category, amount, budget, status, signal, supplier, progress, attention, created_at, updated_at FROM offers WHERE 1=1`
+	query := `SELECT ` + offerColumns + ` FROM offers WHERE 1=1`
 	args := []any{}
 	if f.Status != "" && !strings.EqualFold(f.Status, "all") {
 		query += ` AND LOWER(status) = LOWER(?)`
@@ -170,6 +334,34 @@ func (s *SQLite) ListOffers(ctx context.Context, f OfferFilter) ([]model.Offer, 
 	if f.Query != "" {
 		query += ` AND LOWER(title || ' ' || location || ' ' || category || ' ' || supplier) LIKE ?`
 		args = append(args, "%"+strings.ToLower(f.Query)+"%")
+	}
+	if len(f.Statuses) > 0 {
+		query += ` AND LOWER(status) IN (` + placeholders(len(f.Statuses)) + `)`
+		for _, v := range f.Statuses {
+			args = append(args, strings.ToLower(strings.TrimSpace(v)))
+		}
+	}
+	if len(f.Trades) > 0 {
+		query += ` AND LOWER(CASE WHEN TRIM(trade) <> '' THEN trade ELSE category END) IN (` + placeholders(len(f.Trades)) + `)`
+		for _, v := range f.Trades {
+			args = append(args, strings.ToLower(strings.TrimSpace(v)))
+		}
+	}
+	if clause, clauseArgs := regionClause(f.Regions); clause != "" {
+		query += ` AND (` + clause + `)`
+		args = append(args, clauseArgs...)
+	}
+	for _, v := range f.Requirements {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		query += ` AND LOWER(requirements) LIKE ?`
+		args = append(args, `%"`+strings.ToLower(v)+`"%`)
+	}
+	if f.MinCrewSize > 0 {
+		query += ` AND (crew_size = 0 OR crew_size >= ?)`
+		args = append(args, f.MinCrewSize)
 	}
 	query += ` ORDER BY updated_at DESC`
 	if f.Limit > 0 {
@@ -197,6 +389,34 @@ func (s *SQLite) ListOffers(ctx context.Context, f OfferFilter) ([]model.Offer, 
 	return out, rows.Err()
 }
 
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// regionClause mirrors anyContainsFold's bidirectional substring match in
+// SQL: a region value matches if it contains, or is contained by, the
+// offer's effective region (region, falling back to location).
+func regionClause(regions []string) (string, []any) {
+	effective := `LOWER(CASE WHEN TRIM(region) <> '' THEN region ELSE location END)`
+	var clauses []string
+	var args []any
+	for _, v := range regions {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			continue
+		}
+		clauses = append(clauses, `(`+effective+` LIKE '%' || ? || '%' OR ? LIKE '%' || `+effective+` || '%')`)
+		args = append(args, v, v)
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return strings.Join(clauses, " OR "), args
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -204,17 +424,25 @@ type rowScanner interface {
 func scanOffer(row rowScanner) (model.Offer, error) {
 	var o model.Offer
 	var createdAt, updatedAt int64
-	err := row.Scan(&o.ID, &o.Title, &o.Location, &o.Category, &o.Amount, &o.Budget, &o.Status, &o.Signal, &o.Supplier, &o.Progress, &o.Attention, &createdAt, &updatedAt)
+	var start sql.NullInt64
+	var requirementsJSON, languagesJSON string
+	err := row.Scan(&o.ID, &o.Title, &o.Location, &o.Category, &o.Amount, &o.Budget, &o.Status, &o.Signal, &o.Supplier, &o.Progress, &o.Attention,
+		&o.Trade, &o.Region, &o.CrewSize, &start, &requirementsJSON, &languagesJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return model.Offer{}, err
 	}
+	if start.Valid {
+		o.Start = unixToTime(start.Int64)
+	}
+	o.Requirements = decodeList(requirementsJSON)
+	o.Languages = decodeList(languagesJSON)
 	o.CreatedAt = unixToTime(createdAt)
 	o.UpdatedAt = unixToTime(updatedAt)
 	return o, nil
 }
 
 func (s *SQLite) GetOffer(ctx context.Context, id string) (model.Offer, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, title, location, category, amount, budget, status, signal, supplier, progress, attention, created_at, updated_at FROM offers WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+offerColumns+` FROM offers WHERE id = ?`, id)
 	o, err := scanOffer(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Offer{}, ErrNotFound
@@ -229,9 +457,10 @@ func (s *SQLite) CreateOffer(ctx context.Context, o model.Offer) (model.Offer, e
 	created := nonZeroUnix(o.CreatedAt)
 	updated := nonZeroUnix(time.Now())
 	_, err := s.db.ExecContext(ctx, `INSERT INTO offers
-		(id, title, location, category, amount, budget, status, signal, supplier, progress, attention, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		o.ID, o.Title, o.Location, o.Category, o.Amount, o.Budget, o.Status, o.Signal, o.Supplier, o.Progress, o.Attention, created, updated)
+		(id, title, location, category, amount, budget, status, signal, supplier, progress, attention, trade, region, crew_size, start_at, requirements, languages, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		o.ID, o.Title, o.Location, o.Category, o.Amount, o.Budget, o.Status, o.Signal, o.Supplier, o.Progress, o.Attention,
+		o.Trade, o.Region, o.CrewSize, nullableUnix(o.Start), encodeList(o.Requirements), encodeList(o.Languages), created, updated)
 	if err != nil {
 		return model.Offer{}, fmt.Errorf("store: create offer: %w", err)
 	}
@@ -257,8 +486,9 @@ func (s *SQLite) UpdateOffer(ctx context.Context, o model.Offer) (model.Offer, e
 	}
 
 	updated := nonZeroUnix(time.Now())
-	_, err = tx.ExecContext(ctx, `UPDATE offers SET title=?, location=?, category=?, amount=?, budget=?, status=?, signal=?, supplier=?, progress=?, attention=?, updated_at=? WHERE id=?`,
-		o.Title, o.Location, o.Category, o.Amount, o.Budget, o.Status, o.Signal, o.Supplier, o.Progress, o.Attention, updated, o.ID)
+	_, err = tx.ExecContext(ctx, `UPDATE offers SET title=?, location=?, category=?, amount=?, budget=?, status=?, signal=?, supplier=?, progress=?, attention=?, trade=?, region=?, crew_size=?, start_at=?, requirements=?, languages=?, updated_at=? WHERE id=?`,
+		o.Title, o.Location, o.Category, o.Amount, o.Budget, o.Status, o.Signal, o.Supplier, o.Progress, o.Attention,
+		o.Trade, o.Region, o.CrewSize, nullableUnix(o.Start), encodeList(o.Requirements), encodeList(o.Languages), updated, o.ID)
 	if err != nil {
 		return model.Offer{}, fmt.Errorf("store: update offer: %w", err)
 	}

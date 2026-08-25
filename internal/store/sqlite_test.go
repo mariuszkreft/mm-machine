@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -400,5 +401,231 @@ func TestConcurrentAccessDoesNotLock(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Fatalf("concurrent access error: %v", err)
+	}
+}
+
+func TestOfferFacetRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	o := model.Offer{
+		ID: "T-FACET", Title: "Facet offer", Location: "Berlin", Category: "Energy",
+		Amount: "1", Budget: "1k", Status: "open", Signal: "OK", Supplier: "Acme",
+		Progress: 10, Attention: "none",
+		Trade: "electrical", Region: "Berlin, DE", CrewSize: 4,
+		Requirements: []string{"a1", "insurance"}, Languages: []string{"de", "en"},
+	}
+	created, err := s.CreateOffer(ctx, o)
+	if err != nil {
+		t.Fatalf("CreateOffer: %v", err)
+	}
+	if !created.Start.IsZero() {
+		t.Fatalf("expected zero Start to stay NULL, got %v", created.Start)
+	}
+
+	got, err := s.GetOffer(ctx, "T-FACET")
+	if err != nil {
+		t.Fatalf("GetOffer: %v", err)
+	}
+	if got.Trade != "electrical" || got.Region != "Berlin, DE" || got.CrewSize != 4 {
+		t.Fatalf("facets did not round-trip: %+v", got)
+	}
+	if len(got.Requirements) != 2 || got.Requirements[0] != "a1" || got.Requirements[1] != "insurance" {
+		t.Fatalf("requirements did not round-trip: %+v", got.Requirements)
+	}
+	if len(got.Languages) != 2 {
+		t.Fatalf("languages did not round-trip: %+v", got.Languages)
+	}
+	if !got.Start.IsZero() {
+		t.Fatalf("expected Start to remain NULL, got %v", got.Start)
+	}
+
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	got.Trade = "sanitary"
+	got.CrewSize = 9
+	got.Start = start
+	updated, err := s.UpdateOffer(ctx, got)
+	if err != nil {
+		t.Fatalf("UpdateOffer: %v", err)
+	}
+	if updated.Trade != "sanitary" || updated.CrewSize != 9 || !updated.Start.Equal(start) {
+		t.Fatalf("facet update did not apply: %+v", updated)
+	}
+}
+
+// facetFilters exercises every facet field ListOffers/MatchesFacets support,
+// against the shared seed data.
+var facetFilters = []OfferFilter{
+	{},
+	{Statuses: []string{"open", "done"}},
+	{Trades: []string{"energy"}},
+	{Trades: []string{"steel", "sanitary"}},
+	{Regions: []string{"Munich"}},
+	{Regions: []string{"Zurich, CH"}},
+	{Requirements: []string{"a1"}},
+	{Requirements: []string{"a1", "insurance"}},
+	{MinCrewSize: 6},
+	{MinCrewSize: 12},
+	{Trades: []string{"steel"}, Regions: []string{"Rotterdam"}, MinCrewSize: 6},
+	{Statuses: []string{"process"}, Requirements: []string{"insurance"}},
+}
+
+func offerIDs(offers []model.Offer) []string {
+	ids := make([]string, len(offers))
+	for i, o := range offers {
+		ids[i] = o.ID
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// TestFacetFilterParity proves the SQL path (SQLite) and the Go path
+// (Memory) agree on every facet filter, so the two backends can never
+// silently diverge.
+func TestFacetFilterParity(t *testing.T) {
+	ctx := context.Background()
+	sq := openTestStore(t)
+	mem := NewMemory()
+
+	for _, f := range facetFilters {
+		f := f
+		t.Run(fmt.Sprintf("%+v", f), func(t *testing.T) {
+			sqOut, err := sq.ListOffers(ctx, f)
+			if err != nil {
+				t.Fatalf("SQLite ListOffers: %v", err)
+			}
+			memOut, err := mem.ListOffers(ctx, f)
+			if err != nil {
+				t.Fatalf("Memory ListOffers: %v", err)
+			}
+			sqIDs, memIDs := offerIDs(sqOut), offerIDs(memOut)
+			if fmt.Sprint(sqIDs) != fmt.Sprint(memIDs) {
+				t.Fatalf("facet mismatch for %+v:\n sqlite=%v\n memory=%v", f, sqIDs, memIDs)
+			}
+		})
+	}
+}
+
+func TestProfileUpsertGetRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	p := model.Profile{
+		ID: "profile-1", Role: "owner", Company: "Acme", Contact: "a@acme.test",
+		Trades: []string{"electrical"}, Regions: []string{"Munich, DE"}, CrewSize: 5,
+		Languages: []string{"de"}, Documents: []string{"a1"}, Availability: "now",
+	}
+	saved, err := s.UpsertProfile(ctx, p)
+	if err != nil {
+		t.Fatalf("UpsertProfile: %v", err)
+	}
+	if saved.Completeness != 100 {
+		t.Fatalf("expected full completeness, got %d", saved.Completeness)
+	}
+	if saved.CreatedAt.IsZero() || saved.UpdatedAt.IsZero() {
+		t.Fatalf("expected timestamps, got %+v", saved)
+	}
+
+	got, err := s.GetProfile(ctx, "profile-1")
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if got.Company != "Acme" || len(got.Trades) != 1 || got.Trades[0] != "electrical" {
+		t.Fatalf("profile did not round-trip: %+v", got)
+	}
+	if got.Completeness != 100 {
+		t.Fatalf("expected completeness to round-trip, got %d", got.Completeness)
+	}
+
+	firstCreated := got.CreatedAt
+	p.Documents = nil
+	p.Availability = ""
+	p.Company = "Acme Renamed"
+	updated, err := s.UpsertProfile(ctx, p)
+	if err != nil {
+		t.Fatalf("UpsertProfile (update): %v", err)
+	}
+	if !updated.CreatedAt.Equal(firstCreated) {
+		t.Fatalf("expected CreatedAt to be preserved across upsert: got %v want %v", updated.CreatedAt, firstCreated)
+	}
+	if updated.Completeness != Completeness(p) {
+		t.Fatalf("expected completeness %d, got %d", Completeness(p), updated.Completeness)
+	}
+	if updated.Company != "Acme Renamed" {
+		t.Fatalf("expected updated company, got %q", updated.Company)
+	}
+
+	if _, err := s.GetProfile(ctx, "missing"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestSaveSearchCapAndDedup(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 55; i++ {
+		_, err := s.SaveSearch(ctx, model.SavedSearch{
+			ProfileID: "p1", Label: fmt.Sprintf("q%d", i), Query: fmt.Sprintf("query %d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("SaveSearch %d: %v", i, err)
+		}
+	}
+
+	list, err := s.ListSavedSearches(ctx, "p1")
+	if err != nil {
+		t.Fatalf("ListSavedSearches: %v", err)
+	}
+	if len(list) != 50 {
+		t.Fatalf("expected cap of 50 searches, got %d", len(list))
+	}
+	for _, sv := range list {
+		if sv.Query == "query 0" || sv.Query == "query 4" {
+			t.Fatalf("expected oldest searches to be evicted, found %q", sv.Query)
+		}
+	}
+
+	// Saving an identical query again must not grow the table, and must
+	// bump it to the newest entry rather than duplicating it.
+	dup, err := s.SaveSearch(ctx, model.SavedSearch{
+		ProfileID: "p1", Label: "renamed", Query: "query 54",
+		CreatedAt: base.Add(200 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("SaveSearch dup: %v", err)
+	}
+	afterDup, err := s.ListSavedSearches(ctx, "p1")
+	if err != nil {
+		t.Fatalf("ListSavedSearches: %v", err)
+	}
+	if len(afterDup) != 50 {
+		t.Fatalf("expected dedup to keep cap at 50, got %d", len(afterDup))
+	}
+	var found int
+	for _, sv := range afterDup {
+		if sv.Query == "query 54" {
+			found++
+			if sv.Label != "renamed" {
+				t.Fatalf("expected dedup to update the label, got %q", sv.Label)
+			}
+			if sv.ID != dup.ID {
+				t.Fatalf("expected dedup to keep the same id, got %d want %d", sv.ID, dup.ID)
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("expected exactly one row for the deduplicated query, got %d", found)
+	}
+
+	// A profile that never saved a search still gets an empty (not nil-panicking) list.
+	empty, err := s.ListSavedSearches(ctx, "nobody")
+	if err != nil {
+		t.Fatalf("ListSavedSearches empty: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected no searches for unknown profile, got %d", len(empty))
 	}
 }

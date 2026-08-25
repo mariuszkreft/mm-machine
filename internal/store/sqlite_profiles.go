@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,69 +10,10 @@ import (
 	"mm-machine/internal/model"
 )
 
-// Profiles and saved searches live in their own tables, created lazily so an
-// existing database picks them up on the next boot.
-const profileSchema = `
-CREATE TABLE IF NOT EXISTS profiles (
-    id           TEXT PRIMARY KEY,
-    role         TEXT NOT NULL DEFAULT '',
-    company      TEXT NOT NULL DEFAULT '',
-    contact      TEXT NOT NULL DEFAULT '',
-    trades       TEXT NOT NULL DEFAULT '[]',
-    regions      TEXT NOT NULL DEFAULT '[]',
-    crew_size    INTEGER NOT NULL DEFAULT 0,
-    languages    TEXT NOT NULL DEFAULT '[]',
-    documents    TEXT NOT NULL DEFAULT '[]',
-    availability TEXT NOT NULL DEFAULT '',
-    notes        TEXT NOT NULL DEFAULT '',
-    completeness INTEGER NOT NULL DEFAULT 0,
-    created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS saved_searches (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    profile_id TEXT NOT NULL,
-    label      TEXT NOT NULL,
-    query      TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS saved_searches_profile ON saved_searches(profile_id);
-`
-
-func (s *SQLite) ensureProfileTables() error {
-	if _, err := s.db.Exec(profileSchema); err != nil {
-		return fmt.Errorf("store: profile schema: %w", err)
-	}
-	return nil
-}
-
-func encodeList(v []string) string {
-	if v == nil {
-		v = []string{}
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "[]"
-	}
-	return string(b)
-}
-
-func decodeList(raw string) []string {
-	var out []string
-	if raw == "" {
-		return nil
-	}
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil
-	}
-	return out
-}
+// Profiles and saved searches are defined in schema.sql; this file only
+// holds the read/write paths.
 
 func (s *SQLite) UpsertProfile(ctx context.Context, p model.Profile) (model.Profile, error) {
-	if err := s.ensureProfileTables(); err != nil {
-		return model.Profile{}, err
-	}
 	now := time.Now()
 	created := now
 	if existing, err := s.GetProfile(ctx, p.ID); err == nil {
@@ -102,9 +42,6 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 func (s *SQLite) GetProfile(ctx context.Context, id string) (model.Profile, error) {
-	if err := s.ensureProfileTables(); err != nil {
-		return model.Profile{}, err
-	}
 	var p model.Profile
 	var trades, regions, languages, documents string
 	var createdAt, updatedAt int64
@@ -123,28 +60,41 @@ FROM profiles WHERE id = ?`, id).Scan(&p.ID, &p.Role, &p.Company, &p.Contact, &t
 	return p, nil
 }
 
+// SaveSearch dedupes an identical query for the same profile (the newest
+// write wins, bumping its created_at) and caps each profile at the newest 50
+// searches so the table cannot grow without bound.
 func (s *SQLite) SaveSearch(ctx context.Context, search model.SavedSearch) (model.SavedSearch, error) {
-	if err := s.ensureProfileTables(); err != nil {
-		return model.SavedSearch{}, err
-	}
 	if search.CreatedAt.IsZero() {
 		search.CreatedAt = time.Now()
 	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO saved_searches (profile_id, label, query, created_at) VALUES (?, ?, ?, ?)`,
-		search.ProfileID, search.Label, search.Query, nonZeroUnix(search.CreatedAt))
+	created := nonZeroUnix(search.CreatedAt)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO saved_searches (profile_id, label, query, created_at) VALUES (?, ?, ?, ?)
+ON CONFLICT(profile_id, query) DO UPDATE SET label=excluded.label, created_at=excluded.created_at`,
+		search.ProfileID, search.Label, search.Query, created)
 	if err != nil {
 		return model.SavedSearch{}, fmt.Errorf("store: save search: %w", err)
 	}
-	id, _ := res.LastInsertId()
+	var id int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM saved_searches WHERE profile_id = ? AND query = ?`, search.ProfileID, search.Query,
+	).Scan(&id); err != nil {
+		return model.SavedSearch{}, fmt.Errorf("store: save search: %w", err)
+	}
 	search.ID = id
+	search.CreatedAt = unixToTime(created)
+
+	if _, err := s.db.ExecContext(ctx, `
+DELETE FROM saved_searches
+WHERE profile_id = ? AND id NOT IN (
+    SELECT id FROM saved_searches WHERE profile_id = ? ORDER BY created_at DESC, id DESC LIMIT 50
+)`, search.ProfileID, search.ProfileID); err != nil {
+		return model.SavedSearch{}, fmt.Errorf("store: save search: %w", err)
+	}
 	return search, nil
 }
 
 func (s *SQLite) ListSavedSearches(ctx context.Context, profileID string) ([]model.SavedSearch, error) {
-	if err := s.ensureProfileTables(); err != nil {
-		return nil, err
-	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, profile_id, label, query, created_at FROM saved_searches WHERE profile_id = ? ORDER BY id DESC`, profileID)
 	if err != nil {
