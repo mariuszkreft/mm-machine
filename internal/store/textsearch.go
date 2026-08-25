@@ -303,14 +303,37 @@ func scoreOffer(o model.Offer, terms, extra []string) (float64, string) {
 	title := foldDoc(o.Title)
 	rest := foldDoc(o.Location, o.Category, o.Supplier, o.Trade, o.Region, o.Attention, strings.Join(o.Requirements, " "))
 	score := fieldWeight*fieldScore(title, terms, extra) + fieldScore(rest, terms, extra)
-	return score, o.Title
+	return score * lengthNorm(title, rest), o.Title
 }
 
 func scoreCrew(c model.Crew, terms, extra []string) (float64, string) {
 	name := foldDoc(c.Name)
 	rest := foldDoc(c.Company, strings.Join(c.Trades, " "), strings.Join(c.Regions, " "), c.Note, strings.Join(c.Documents, " "))
 	score := fieldWeight*fieldScore(name, terms, extra) + fieldScore(rest, terms, extra)
-	return score, c.Name
+	return score * lengthNorm(name, rest), c.Name
+}
+
+// lengthNorm approximates bm25's bias towards shorter documents: the same
+// term in a terse record is stronger evidence than in a long one. Without it
+// the two backends disagree on which of two equally-matching records ranks
+// first, which is exactly what the parity test exists to catch.
+//
+// b mirrors bm25's length-normalisation constant, and avgWords is the rough
+// average document length of this corpus — precision beyond that would be
+// false: the goal is agreement on the top hit, not an identical score.
+func lengthNorm(fields ...string) float64 {
+	const (
+		b        = 0.75
+		avgWords = 24.0
+	)
+	words := 0
+	for _, f := range fields {
+		words += len(termPattern.FindAllString(f, -1))
+	}
+	if words == 0 {
+		return 1
+	}
+	return 1 / (1 - b + b*(float64(words)/avgWords))
 }
 
 // --- SQLite: FTS5-backed TextSearch ------------------------------------------

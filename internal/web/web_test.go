@@ -147,25 +147,25 @@ func TestOffersFiltersByStatus(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "Warehouse steel assembly") {
+	if !strings.Contains(body, "Stahlbau Lagerhalle") {
 		t.Fatalf("open view missing its offer: %s", body)
 	}
-	if strings.Contains(body, "Photovoltaic roof installation") {
+	if strings.Contains(body, "Photovoltaik-Dachmontage") {
 		t.Fatalf("open view leaked a process offer: %s", body)
 	}
 }
 
 func TestOffersFiltersByQuery(t *testing.T) {
 	mux := newMux(testDeps(t))
-	rec := do(mux, http.MethodGet, "/offers?view=all&q=Zurich", "", true, nil)
+	rec := do(mux, http.MethodGet, "/offers?view=all&q=Zürich", "", true, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "Retail floor refit") {
+	if !strings.Contains(body, "Ladenbau Umbau") {
 		t.Fatalf("query missing matching offer: %s", body)
 	}
-	if strings.Contains(body, "Warehouse steel assembly") {
+	if strings.Contains(body, "Stahlbau Lagerhalle") {
 		t.Fatalf("query leaked a non-matching offer: %s", body)
 	}
 }
@@ -208,7 +208,7 @@ func TestOffersStatusMovesOffer(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "Warehouse steel assembly") {
+	if !strings.Contains(body, "Stahlbau Lagerhalle") {
 		t.Fatalf("moved offer missing from re-render: %s", body)
 	}
 }
