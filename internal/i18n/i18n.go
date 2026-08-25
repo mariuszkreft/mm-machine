@@ -110,6 +110,13 @@ func NewPrinter(r *http.Request) Printer { return Printer{Lang: Detect(r)} }
 // T is the template-facing lookup.
 func (p Printer) T(key string) string { return T(p.Lang, key) }
 
+// Ago is the template-facing relative-time helper, bound to the printer's
+// language so templates never call the model's language-blind Ago directly.
+func (p Printer) Ago(t time.Time) string { return Ago(p.Lang, t) }
+
+// Date is the template-facing date formatter, bound to the printer's language.
+func (p Printer) Date(t time.Time) string { return Date(p.Lang, t) }
+
 // Is reports whether the printer is set to a language, for template branches.
 func (p Printer) Is(l string) bool { return string(p.Lang) == l }
 

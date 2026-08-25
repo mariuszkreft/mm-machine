@@ -119,6 +119,118 @@ func Personas() []model.Persona {
 				},
 			},
 		},
+		{
+			Key:   "su-trockenbau-pl",
+			Label: "Nachunternehmer · Trockenbau, PL",
+			Lang:  "de",
+			Summary: map[string]string{
+				"de": "Polnische Trockenbaukolonne mit zehn Leuten, A1 liegt vor, sucht Großflächenprojekte im deutschsprachigen Raum.",
+				"en": "Polish drywall crew of ten, A1 in place, looking for large-area projects in the DACH region.",
+			},
+			Profile: model.Profile{
+				Role: "executor", Company: "Kowalski Ausbau", Contact: "Kolonnenführer",
+				Trades: []string{"drywall", "interior"}, Regions: []string{"Berlin, DE", "Stuttgart, DE", "Nürnberg, DE"},
+				CrewSize: 10, Languages: []string{"pl", "de"}, Documents: []string{"a1"},
+				Availability: "ab Ende September, 10 Wochen",
+				Notes:        "Brandschutzwände und Großflächen, Zertifikatsnachweise werden gerade nachgereicht.",
+			},
+			SampleAsks: map[string][]string{
+				"de": {
+					"Welche Trockenbau-Ausschreibungen passen zu zehn Leuten?",
+					"Wer braucht eine Kolonne mit Brandschutzerfahrung?",
+					"Welche Papiere fehlen mir noch für größere Projekte?",
+				},
+				"en": {
+					"Which drywall tenders fit a crew of ten?",
+					"Who needs a crew with fire-safety experience?",
+					"Which papers am I still missing for bigger projects?",
+				},
+			},
+		},
+		{
+			Key:   "su-sanitaer-at",
+			Label: "Einzelunternehmer · Sanitär, AT",
+			Lang:  "de",
+			Summary: map[string]string{
+				"de": "Österreichischer Sanitärinstallateur, arbeitet allein, sucht kurzfristige Einsätze in Wien und Umgebung.",
+				"en": "Austrian sanitary installer working solo, looking for short-notice jobs around Vienna.",
+			},
+			Profile: model.Profile{
+				Role: "executor", Company: "Berger Haustechnik", Contact: "Inhaber",
+				Trades: []string{"sanitary"}, Regions: []string{"Wien, AT", "Linz, AT"},
+				CrewSize: 1, Languages: []string{"de"}, Documents: []string{"a1", "certificates"},
+				Availability: "kurzfristig verfügbar, auch Wochenende",
+				Notes:        "Ein-Mann-Betrieb, gut für kleine Bäder und Notfälle, kein eigenes Team.",
+			},
+			SampleAsks: map[string][]string{
+				"de": {
+					"Welche kleinen Sanitäraufträge gibt es diese Woche in Wien?",
+					"Wer sucht einen Einzelmonteur ohne eigene Kolonne?",
+					"Passt mein Profil für Hotelbäder?",
+				},
+				"en": {
+					"Which small sanitary jobs are open this week in Vienna?",
+					"Who is looking for a solo fitter without a crew?",
+					"Does my profile fit hotel bathroom work?",
+				},
+			},
+		},
+		{
+			Key:   "gu-energie-de",
+			Label: "Generalunternehmer · Energie, DE",
+			Lang:  "de",
+			Summary: map[string]string{
+				"de": "Projektleiter eines Energietechnik-GU, baut einen Solarpark in Leipzig und braucht mehrere Montagekolonnen.",
+				"en": "Project lead at a German energy contractor, building a solar park near Leipzig and needs several installation crews.",
+			},
+			Profile: model.Profile{
+				Role: "owner", Company: "Leipziger Energiewerke", Contact: "Projektleitung",
+				Trades: []string{"energy", "electrical"}, Regions: []string{"Leipzig, DE"},
+				CrewSize: 16, Languages: []string{"de"}, Documents: []string{"a1", "insurance", "certificates"},
+				Availability: "ab 1. Dezember, mehrere Kolonnen parallel",
+				Notes:        "Freiflächenanlage, 38.000 Module, Montage und Verkabelung in Teilabschnitten.",
+			},
+			SampleAsks: map[string][]string{
+				"de": {
+					"Wer kann 16 Leute für Solarmontage stellen?",
+					"Welche Energietechnik-Kolonnen sind ab Dezember frei?",
+					"Zeig mir passende Kolonnen für mein Projekt in Leipzig",
+				},
+				"en": {
+					"Who can field 16 people for solar installation?",
+					"Which energy crews are free from December?",
+					"Show me crews that fit my Leipzig project",
+				},
+			},
+		},
+		{
+			Key:   "su-klima-de",
+			Label: "Nachunternehmer · Klima, DE",
+			Lang:  "de",
+			Summary: map[string]string{
+				"de": "Deutsche Klimakolonne mit neun Leuten, spezialisiert auf Rechenzentren, sucht Anschlussaufträge im Rheinland.",
+				"en": "German HVAC crew of nine, specialized in data centers, looking for follow-up work in the Rhineland.",
+			},
+			Profile: model.Profile{
+				Role: "executor", Company: "Rheinluft Service", Contact: "Kolonnenführer",
+				Trades: []string{"hvac"}, Regions: []string{"Frankfurt, DE", "Köln, DE"},
+				CrewSize: 9, Languages: []string{"de", "en"}, Documents: []string{"a1", "insurance", "certificates"},
+				Availability: "ab Mitte November",
+				Notes:        "Rechenzentren und Reinräume, Sicherheitsüberprüfung der Kolonne liegt vor.",
+			},
+			SampleAsks: map[string][]string{
+				"de": {
+					"Welche Klima-Aufträge passen zu neun Leuten im Rheinland?",
+					"Wer braucht eine Kolonne mit Sicherheitsüberprüfung?",
+					"Offene Lüftungsprojekte ab November",
+				},
+				"en": {
+					"Which HVAC jobs fit nine people in the Rhineland?",
+					"Who needs a crew with security clearance?",
+					"Open ventilation projects from November",
+				},
+			},
+		},
 	}
 }
 

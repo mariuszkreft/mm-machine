@@ -55,29 +55,88 @@ func stripNegated(list, excluded []string) []string {
 
 // --- dates and durations -----------------------------------------------------
 
+// monthNames covers both English and German month names/abbreviations
+// (including the Austrian "Jänner"), so a raw sentence in either language
+// resolves to the same time.Month.
 var monthNames = map[string]time.Month{
-	"jan": time.January, "january": time.January,
-	"feb": time.February, "february": time.February,
+	"jan": time.January, "january": time.January, "januar": time.January,
+	"jän": time.January, "jänner": time.January,
+	"feb": time.February, "february": time.February, "februar": time.February,
 	"mar": time.March, "march": time.March,
+	"mär": time.March, "märz": time.March, "maerz": time.March, "mrz": time.March,
 	"apr": time.April, "april": time.April,
-	"may": time.May,
-	"jun": time.June, "june": time.June,
-	"jul": time.July, "july": time.July,
+	"may": time.May, "mai": time.May,
+	"jun": time.June, "june": time.June, "juni": time.June,
+	"jul": time.July, "july": time.July, "juli": time.July,
 	"aug": time.August, "august": time.August,
 	"sep": time.September, "sept": time.September, "september": time.September,
-	"oct": time.October, "october": time.October,
+	"oct": time.October, "october": time.October, "okt": time.October, "oktober": time.October,
 	"nov": time.November, "november": time.November,
-	"dec": time.December, "december": time.December,
+	"dec": time.December, "december": time.December, "dez": time.December, "dezember": time.December,
 }
 
-var monthRe = regexp.MustCompile(`(?i)\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b`)
+var monthRe = regexp.MustCompile(`(?i)\b(jan(?:uary|uar)?|jän(?:ner)?|feb(?:ruary|ruar)?|mär(?:z)?|maerz|mrz|mar(?:ch)?|apr(?:il)?|mai|may|jun(?:e|i)?|jul(?:y|i)?|aug(?:ust)?|sept?(?:ember)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|dez(?:ember)?|dec(?:ember)?)\b`)
 
+// wordNumbers and deWordNumbers spell out small counts in English and
+// German, for both a duration ("three weeks"/"drei Wochen") and a crew size
+// ("six fitters"/"sechs Monteure").
 var wordNumbers = map[string]int{
 	"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
 	"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
 }
 
-var durationRe = regexp.MustCompile(`(?i)(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?\b`)
+var deWordNumbers = map[string]int{
+	"ein": 1, "eine": 1, "einen": 1, "einem": 1, "zwei": 2, "drei": 3, "vier": 4,
+	"fünf": 5, "fuenf": 5, "sechs": 6, "sieben": 7, "acht": 8, "neun": 9, "zehn": 10,
+}
+
+// parseAnyNumber reads a digit string or a spelled-out English/German
+// number word, so every count-bearing phrase (duration, crew size) can share
+// one parser regardless of the sentence's language.
+func parseAnyNumber(tok string) (int, bool) {
+	tok = strings.ToLower(tok)
+	if v, err := strconv.Atoi(tok); err == nil {
+		return v, true
+	}
+	if v, ok := wordNumbers[tok]; ok {
+		return v, true
+	}
+	if v, ok := deWordNumbers[tok]; ok {
+		return v, true
+	}
+	return 0, false
+}
+
+var durationRe = regexp.MustCompile(`(?i)(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|` +
+	`ein|eine|einen|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun|zehn)\s+` +
+	`(day|week|month|tag|woche|monat)(?:s|e|en|n)?\b`)
+
+// crewSizeRe reads "six fitters"/"sechs Monteure" style phrases; crewOfRe
+// reads the "crew of six"/"Kolonne von sechs" style instead.
+var crewSizeRe = regexp.MustCompile(`(?i)\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|` +
+	`ein|eine|einen|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun|zehn)\s+` +
+	`(monteure?|leute|arbeiter|mitarbeiter|kolonne|mann|personen|crew|electricians?|fitters?|people|workers?|team)\b`)
+
+var crewOfRe = regexp.MustCompile(`(?i)\b(?:crew|team|kolonne)\s+(?:of|von|aus)\s+(\d+)\b`)
+
+// parseCrewSize reads a crew-size phrase out of the raw sentence in either
+// language. It is the mechanical-fallback counterpart to the model's
+// crewSize field: the LLM path gets the count from the JSON schema, this is
+// what the no-model path uses instead.
+func parseCrewSize(raw string) (int, bool) {
+	low := strings.ToLower(raw)
+	if m := crewSizeRe.FindStringSubmatch(low); m != nil {
+		if n, ok := parseAnyNumber(m[1]); ok {
+			return n, true
+		}
+	}
+	if m := crewOfRe.FindStringSubmatch(low); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
 
 // parseWindowAt turns a date/duration phrase into a concrete [start, end)
 // window. It understands "from <month> for <n> <unit>", a bare month
@@ -89,19 +148,24 @@ func parseWindowAt(raw string, now time.Time) (start, end time.Time, ok bool) {
 	monthStart, hasMonth := parseMonthStart(low, now)
 	n, unit, hasDur := parseDuration(low)
 
+	next := strings.Contains(low, "next") || strings.Contains(low, "nächst") || strings.Contains(low, "naechst")
+	thisWeek := strings.Contains(low, "this week") || strings.Contains(low, "diese woche") || strings.Contains(low, "diesen woche")
+	thisMonth := strings.Contains(low, "this month") || strings.Contains(low, "diesen monat") || strings.Contains(low, "diesem monat")
+
 	switch {
 	case hasMonth && hasDur:
 		return monthStart, addUnits(monthStart, n, unit), true
 	case hasMonth:
 		return monthStart, monthStart.AddDate(0, 1, 0), true
-	case strings.Contains(low, "next") && hasDur:
+	case next && hasDur:
 		return dayStart(now), addUnits(dayStart(now), n, unit), true
 	case hasDur:
-		// A bare duration ("for three weeks") with no anchor starts now.
+		// A bare duration ("for three weeks"/"für drei Wochen") with no
+		// anchor starts now.
 		return dayStart(now), addUnits(dayStart(now), n, unit), true
-	case strings.Contains(low, "this week"):
+	case thisWeek:
 		return dayStart(now), dayStart(now).AddDate(0, 0, 7), true
-	case strings.Contains(low, "this month"):
+	case thisMonth:
 		return dayStart(now), dayStart(now).AddDate(0, 1, 0), true
 	}
 	return time.Time{}, time.Time{}, false
@@ -113,12 +177,12 @@ func dayStart(t time.Time) time.Time {
 }
 
 func addUnits(t time.Time, n int, unit string) time.Time {
-	switch unit {
-	case "week":
+	switch strings.ToLower(unit) {
+	case "week", "woche":
 		return t.AddDate(0, 0, 7*n)
-	case "month":
+	case "month", "monat":
 		return t.AddDate(0, n, 0)
-	default: // day
+	default: // day, tag
 		return t.AddDate(0, 0, n)
 	}
 }
@@ -128,11 +192,8 @@ func parseDuration(low string) (n int, unit string, ok bool) {
 	if m == nil {
 		return 0, "", false
 	}
-	if v, err := strconv.Atoi(m[1]); err == nil {
-		n = v
-	} else if v, known := wordNumbers[m[1]]; known {
-		n = v
-	} else {
+	n, ok = parseAnyNumber(m[1])
+	if !ok {
 		return 0, "", false
 	}
 	return n, m[2], true
@@ -157,11 +218,13 @@ func parseMonthStart(low string, now time.Time) (time.Time, bool) {
 
 // --- budget bounds -----------------------------------------------------------
 
-var budgetMaxRe = regexp.MustCompile(`(?i)\b(?:under|below|max(?:imum)?|less than)\s*(?:eur|€)?\s*([\d][\d.,]*)\s*(k|m)?\b`)
-var budgetMinRe = regexp.MustCompile(`(?i)\b(?:over|above|min(?:imum)?|at least|more than)\s*(?:eur|€)?\s*([\d][\d.,]*)\s*(k|m)?\b`)
+var budgetMaxRe = regexp.MustCompile(`(?i)\b(?:under|below|max(?:imum)?|less than|` +
+	`unter|höchstens|hoechstens|maximal|weniger als)\s*(?:eur|€)?\s*([\d][\d.,]*)\s*(k|m|mio|tsd)?\b`)
+var budgetMinRe = regexp.MustCompile(`(?i)\b(?:over|above|min(?:imum)?|at least|more than|` +
+	`über|ueber|mindestens|mehr als)\s*(?:eur|€)?\s*([\d][\d.,]*)\s*(k|m|mio|tsd)?\b`)
 
-// parseBudgetBounds reads "under 100k" / "over EUR 50k" style phrases out of
-// the raw sentence into EUR bounds.
+// parseBudgetBounds reads "under 100k" / "over EUR 50k" / "unter 100k" /
+// "mindestens 50k" style phrases out of the raw sentence into EUR bounds.
 func parseBudgetBounds(raw string) (min int, hasMin bool, max int, hasMax bool) {
 	if m := budgetMaxRe.FindStringSubmatch(raw); m != nil {
 		if v, ok := parseMoneyToken(m[1], m[2]); ok {
@@ -183,9 +246,9 @@ func parseMoneyToken(numStr, suffix string) (int, bool) {
 		return 0, false
 	}
 	switch strings.ToLower(suffix) {
-	case "k":
+	case "k", "tsd":
 		f *= 1_000
-	case "m":
+	case "m", "mio":
 		f *= 1_000_000
 	}
 	return int(f), true
@@ -207,19 +270,21 @@ func parseOfferBudget(s string) (int, bool) {
 
 // --- negations ----------------------------------------------------------------
 
-var negationRe = regexp.MustCompile(`(?i)\b(?:not|except|excluding|no)\s+([a-zA-Z][\w-]*)`)
+var negationRe = regexp.MustCompile(`(?i)\b(?:not|except|excluding|no|` +
+	`nicht|außer|ausser|ohne|kein|keine|keinen)\s+([\p{L}][\p{L}0-9-]*)`)
 
-// parseNegations pulls single-word exclusions ("not Vienna", "excluding
-// steel") out of the raw sentence, sorting each into a trade or a region
-// exclusion depending on whether it names a known trade.
+// parseNegations pulls single-word exclusions ("not Vienna"/"nicht Wien",
+// "excluding steel"/"außer Stahlbau") out of the raw sentence, sorting each
+// into a trade or a region exclusion depending on whether it names a known
+// trade.
 func parseNegations(raw string) (excludeTrades, excludeRegions []string) {
 	for _, m := range negationRe.FindAllStringSubmatch(raw, -1) {
 		word := strings.TrimSpace(m[1])
 		if word == "" {
 			continue
 		}
-		if hasFold(knownTrades, word) {
-			excludeTrades = append(excludeTrades, strings.ToLower(word))
+		if slug, ok := matchTradeSlug(word); ok {
+			excludeTrades = append(excludeTrades, slug)
 		} else {
 			excludeRegions = append(excludeRegions, word)
 		}

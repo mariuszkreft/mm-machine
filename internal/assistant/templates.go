@@ -7,7 +7,7 @@ const panelHTML = `{{define "panel"}}<div id="assistant-panel" class="assistant-
     <span class="model">{{.Model}}</span>
   </div>
   <div id="assistant-log" class="assistant-log">
-    {{if .History}}{{range .History}}<div class="bubble {{.Role}}"><span class="who">{{.Role}}</span><p>{{.Content}}</p></div>{{end}}{{else}}<div class="bubble assistant"><span class="who">assistant</span><p>{{.Greeting}}</p></div>{{end}}
+    {{if .History}}{{range .History}}<div class="mm-msg {{if eq .Role "user"}}you{{else}}mm{{end}}"><span class="mm-who">{{bubbleLabel $.Lang .Role}}</span><p>{{.Content}}</p></div>{{end}}{{else}}<div class="mm-msg mm"><span class="mm-who">{{bubbleLabel .Lang "assistant"}}</span><p>{{.Greeting}}</p></div>{{end}}
   </div>
   <div id="assistant-typing" class="typing-indicator" aria-live="polite"><span></span><span></span><span></span></div>
   <form class="assistant-form"
@@ -20,22 +20,19 @@ const panelHTML = `{{define "panel"}}<div id="assistant-panel" class="assistant-
     <input type="hidden" name="conversation" value="{{.ConversationID}}">
     <input type="hidden" name="role" value="{{.Role}}">
     <input type="hidden" name="route" value="{{.Route}}">
-    <input name="message" placeholder="Ask about the app, or tell it what is broken" autocomplete="off" required>
-    <button type="submit">Send</button>
-    <span id="assistant-busy" class="htmx-indicator">thinking…</span>
+    <input name="message" placeholder="{{.PlaceholderLabel}}" autocomplete="off" required>
+    <button type="submit">{{.SendLabel}}</button>
+    <span id="assistant-busy" class="htmx-indicator">{{.BusyLabel}}</span>
   </form>
   <form class="feedback-form" hx-post="/feedback" hx-target="this" hx-swap="outerHTML">
     <input type="hidden" name="conversation" value="{{.ConversationID}}">
     <input type="hidden" name="role" value="{{.Role}}">
     <input type="hidden" name="route" value="{{.Route}}">
     <select name="kind">
-      <option value="bug">bug</option>
-      <option value="confusion">confusion</option>
-      <option value="request">request</option>
-      <option value="praise">praise</option>
+      {{range .KindOptions}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
     </select>
-    <input name="verbatim" placeholder="Direct feedback about this app" required>
-    <button type="submit">Log feedback</button>
+    <input name="verbatim" placeholder="{{.FeedbackPlaceholder}}" required>
+    <button type="submit">{{.FeedbackButtonLabel}}</button>
   </form>
   <script>
   (function () {
@@ -72,4 +69,4 @@ const panelHTML = `{{define "panel"}}<div id="assistant-panel" class="assistant-
   </script>
 </div>{{end}}`
 
-const bubbleHTML = `{{define "bubble"}}<div class="bubble {{.Role}}"><span class="who">{{.Role}}</span><p>{{.Content}}</p></div>{{end}}`
+const bubbleHTML = `{{define "bubble"}}<div class="mm-msg {{if eq .Role "user"}}you{{else}}mm{{end}}"><span class="mm-who">{{.Role}}</span><p>{{.Content}}</p></div>{{end}}`

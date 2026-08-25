@@ -24,6 +24,7 @@ const pageHTML = `{{define "demo"}}<!doctype html>
     <section class="mm-ask">
       <h1>{{.T.T "demo.title"}}</h1>
       <p class="mm-lede">{{.T.T "demo.explain"}}</p>
+      <p class="mm-lede demo-mechanics">{{.Changes}} {{.Unchanged}}</p>
     </section>
 
     <div class="mm-cards demo-grid">
@@ -35,6 +36,7 @@ const pageHTML = `{{define "demo"}}<!doctype html>
         </div>
         <h3>{{.Label}}</h3>
         <p>{{.Summary}}</p>
+        <p class="mm-muted demo-sees">{{.Sees}}</p>
         <div class="mm-suggest">
           {{range .Trades}}<span class="mm-chip">{{.}}</span>{{end}}
           {{range .Regions}}<span class="mm-chip">{{.}}</span>{{end}}

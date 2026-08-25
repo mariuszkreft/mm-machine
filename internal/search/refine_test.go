@@ -3,6 +3,7 @@ package search
 import (
 	"testing"
 
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 )
 
@@ -14,7 +15,7 @@ func TestBuildChipsReflectsCorpus(t *testing.T) {
 	}
 	intent := model.Intent{Trades: []string{"energy"}, Regions: []string{"Munich"}}
 
-	chips := buildChips(matches, intent)
+	chips := buildChips(matches, intent, i18n.EN)
 
 	var haveSteel, haveRotterdam, haveRequested, haveEnergyChip, haveMunichChip bool
 	for _, c := range chips {

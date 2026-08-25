@@ -6,7 +6,9 @@
 // extraction all live here: /assistant/panel renders the widget and any
 // existing history, /assistant/turn + /assistant/stream drive the
 // server-sent-events flow, /assistant/message is the synchronous fallback for
-// clients without SSE, and Extract is the background feedback miner.
+// clients without SSE, and Extract is the background feedback miner. Every
+// answer comes back in the visitor's own language — German or English — and
+// a German complaint is mined and stored as German feedback, never translated.
 package assistant
 
 import (
@@ -23,6 +25,8 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/demo"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
@@ -44,9 +48,12 @@ type Handler struct {
 
 // Register wires the assistant routes onto mux.
 func Register(mux *http.ServeMux, deps app.Deps) *Handler {
+	funcs := template.FuncMap{
+		"bubbleLabel": func(lang i18n.Lang, role string) string { return lt(lang, "bubble."+role) },
+	}
 	h := &Handler{
 		deps: deps,
-		tpl:  template.Must(template.New("assistant").Parse(panelHTML + bubbleHTML)),
+		tpl:  template.Must(template.New("assistant").Funcs(funcs).Parse(panelHTML + bubbleHTML)),
 	}
 	mux.HandleFunc("/assistant/panel", h.panel)
 	mux.HandleFunc("/assistant/message", h.message)
@@ -56,14 +63,77 @@ func Register(mux *http.ServeMux, deps app.Deps) *Handler {
 	return h
 }
 
+// --- localization ------------------------------------------------------------
+//
+// The widget chrome (send/busy labels, placeholders, the feedback form, the
+// bubble role tags) has no dedicated key in the shared i18n catalog, so it
+// stays in this package-local table (reported alongside this change, per the
+// task brief). The assistant's own answers are never looked up here — they
+// come straight from the model, steered by i18n.AnswerIn in SystemPrompt.
+var localLabel = map[i18n.Lang]map[string]string{
+	i18n.DE: {
+		"greeting": "Ich bin der Montage-Manager-Assistent und laufe auf dem lokalen Cluster-Modell. " +
+			"Fragen Sie mich alles zu dieser App — und sagen Sie mir, was daran nicht stimmt. Jede Rückmeldung wird zu einem Backlog-Eintrag.",
+		"send":                 "Fragen",
+		"busy":                 "denkt nach…",
+		"placeholder":          "Fragen Sie zur App, oder sagen Sie, was kaputt ist",
+		"feedback.placeholder": "Direkte Rückmeldung zu dieser App",
+		"feedback.button":      "Feedback notieren",
+		"kind.bug":             "Fehler",
+		"kind.confusion":       "Verwirrung",
+		"kind.request":         "Wunsch",
+		"kind.praise":          "Lob",
+		"bubble.user":          "Sie",
+		"bubble.assistant":     "Assistent",
+		"error.noAnswer":       "Das lokale Modell hat nicht geantwortet: %s",
+		"error.empty":          "Das lokale Modell hat leer geantwortet (Grund: %s).",
+	},
+	i18n.EN: {
+		"greeting": "I am the Montage Manager assistant, running on the local cluster model. " +
+			"Ask me anything about this app — and tell me what is wrong with it. Every complaint becomes a backlog item.",
+		"send":                 "Ask",
+		"busy":                 "thinking…",
+		"placeholder":          "Ask about the app, or tell it what is broken",
+		"feedback.placeholder": "Direct feedback about this app",
+		"feedback.button":      "Log feedback",
+		"kind.bug":             "bug",
+		"kind.confusion":       "confusion",
+		"kind.request":         "request",
+		"kind.praise":          "praise",
+		"bubble.user":          "you",
+		"bubble.assistant":     "assistant",
+		"error.noAnswer":       "The local model did not answer: %s",
+		"error.empty":          "The local model returned an empty answer (finish reason: %s).",
+	},
+}
+
+// lt looks up a package-local fragment, falling back to English.
+func lt(lang i18n.Lang, key string) string {
+	if m, ok := localLabel[lang]; ok {
+		if s, ok := m[key]; ok {
+			return s
+		}
+	}
+	return localLabel[i18n.EN][key]
+}
+
+type kindOption struct{ Value, Label string }
+
 // panelView is the view model for the assistant panel.
 type panelView struct {
-	ConversationID string
-	Role           string
-	Route          string
-	Model          string
-	Greeting       string
-	History        []model.ChatMessage
+	ConversationID      string
+	Role                string
+	Route               string
+	Model               string
+	Lang                i18n.Lang
+	Greeting            string
+	SendLabel           string
+	BusyLabel           string
+	PlaceholderLabel    string
+	FeedbackPlaceholder string
+	FeedbackButtonLabel string
+	KindOptions         []kindOption
+	History             []model.ChatMessage
 }
 
 func newID() string {
@@ -101,6 +171,7 @@ func (h *Handler) conversation(w http.ResponseWriter, r *http.Request, role, rou
 
 func (h *Handler) panel(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	lang := i18n.Detect(r)
 	role := r.URL.Query().Get("role")
 	if role == "" {
 		role = "owner"
@@ -121,34 +192,59 @@ func (h *Handler) panel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view := panelView{
-		ConversationID: conv.ID,
-		Role:           conv.Role,
-		Route:          conv.Route,
-		Model:          h.deps.LLMModel,
-		Greeting:       "I am the Montage Manager assistant, running on the local cluster model. Ask me anything about this app — and tell me what is wrong with it. Every complaint becomes a backlog item.",
-		History:        turns,
+		ConversationID:      conv.ID,
+		Role:                conv.Role,
+		Route:               conv.Route,
+		Model:               h.deps.LLMModel,
+		Lang:                lang,
+		Greeting:            lt(lang, "greeting"),
+		SendLabel:           lt(lang, "send"),
+		BusyLabel:           lt(lang, "busy"),
+		PlaceholderLabel:    lt(lang, "placeholder"),
+		FeedbackPlaceholder: lt(lang, "feedback.placeholder"),
+		FeedbackButtonLabel: lt(lang, "feedback.button"),
+		KindOptions: []kindOption{
+			{Value: "bug", Label: lt(lang, "kind.bug")},
+			{Value: "confusion", Label: lt(lang, "kind.confusion")},
+			{Value: "request", Label: lt(lang, "kind.request")},
+			{Value: "praise", Label: lt(lang, "kind.praise")},
+		},
+		History: turns,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = h.tpl.ExecuteTemplate(w, "panel", view)
 }
 
 // SystemPrompt describes the app to itself, pulling in live state so the
-// assistant can answer "what can I do here?", "what did other users complain
-// about?" and "what are you going to fix next?" truthfully.
-func SystemPrompt(ctx context.Context, deps app.Deps, role, route, conversationID string) string {
+// assistant can answer "what can I do here?", "what happens to my data?" and
+// "how do you pick the matches?" truthfully — and closes with i18n.AnswerIn
+// so it never answers a German page in English.
+func SystemPrompt(ctx context.Context, deps app.Deps, role, route, conversationID string, lang i18n.Lang) string {
 	lines := []string{
 		"You are the in-app assistant of Montage Manager (mm.machinemachine.ai), a marketplace that connects Generalunternehmer (GU, project owners) with Subunternehmer (SU, subcontractors) for assembly and installation work in the DACH region, without broker margin leakage.",
 		"The app is a Go + htmx server. Public routes: / (hero, assistant, perspectives, pipeline, modules, roadmap), /offers (pipeline partial, filter by status and free text), /perspective (role switch), /offers/new (create an offer), /assistant/* (this chat), /feedback (feedback capture), /dev (the development loop backlog), /healthz.",
 		"Modules: AI Job Assistant, Team Builder, Document Safe, Status Documentation, Dispute Desk.",
-		"You run on a local vLLM cluster; no user data leaves the fleet.",
-		"Your second job matters as much as the first: collect honest feedback about this app. Ask what confused the user, what is missing, what broke. Be short, concrete and never salesy. Two or three sentences per answer.",
+		"How matching works, if asked: a visitor's own sentence is read into a structured intent (trade, region, crew size, documents, timing) by this same local model; offers and crews are then ranked against it with a 0-100 fit score, and every result is shown with the short list of reasons behind that score — never a bare number.",
+		"You run on a local vLLM cluster; no user data leaves the fleet, and nothing goes to a third party — profiles, conversations and feedback all live in this app's own database.",
 	}
 	if deps.Version != "" {
 		lines = append(lines, fmt.Sprintf("Running app version %s.", deps.Version))
 	}
 	if counts, err := deps.Store.CountOffersByStatus(ctx); err == nil {
-		lines = append(lines, fmt.Sprintf("Live offer pipeline right now: %d total, %d open, %d requested, %d in process, %d done.",
-			counts["all"], counts["open"], counts["requested"], counts["process"], counts["done"]))
+		crews, _ := deps.Store.ListCrews(ctx, store.CrewFilter{})
+		lines = append(lines, fmt.Sprintf("Live corpus right now: %d offers (%d open, %d requested, %d in process, %d done) and %d crews — that is what search and matching draw from.",
+			counts["all"], counts["open"], counts["requested"], counts["process"], counts["done"], len(crews)))
+	}
+	if personas := demo.Personas(); len(personas) > 0 {
+		examples := make([]string, 0, len(personas))
+		for _, p := range personas {
+			summary := p.Summary[string(lang)]
+			if summary == "" {
+				summary = p.Summary["en"]
+			}
+			examples = append(examples, fmt.Sprintf("%s: %s", p.Label, summary))
+		}
+		lines = append(lines, "A visitor who has typed nothing yet can look around as one of these example profiles from /demo, no signup needed: "+strings.Join(examples, " | ")+".")
 	}
 	if backlog, err := deps.Store.ListBacklog(ctx); err == nil && len(backlog) > 0 {
 		top := backlog
@@ -159,14 +255,17 @@ func SystemPrompt(ctx context.Context, deps app.Deps, role, route, conversationI
 		for _, b := range top {
 			items = append(items, fmt.Sprintf("%q (%d reports, score %.1f)", b.Title, b.Count, b.Score))
 		}
-		lines = append(lines, "Top of the dev backlog right now, clustered from real user feedback: "+strings.Join(items, "; ")+". That is honestly what gets fixed next, in that order.")
+		lines = append(lines, "Your second job matters as much as the first: when a visitor names a bug, confusion or missing feature, it is stored as a feedback record (kind, short theme, severity 1-5, their own verbatim words), and the dev loop clusters matching records into the backlog shown at /dev, ranked by how often a theme repeats times its severity — that order is what gets worked on next. "+
+			"Top of that backlog right now: "+strings.Join(items, "; ")+". That is honestly what gets fixed next, in that order.")
 	} else {
-		lines = append(lines, "The dev backlog is currently empty: no feedback has been clustered yet.")
+		lines = append(lines, "Your second job matters as much as the first: when a visitor names a bug, confusion or missing feature, it is stored as a feedback record and the dev loop clusters it into the backlog at /dev, ranked by how often a theme repeats times its severity. The backlog is currently empty: no feedback has been clustered yet.")
 	}
-	lines = append(lines, fmt.Sprintf("The visitor is currently in the %q perspective on route %q.", role, route))
+	lines = append(lines, "Be short, concrete and never salesy — two or three sentences per answer.")
+	lines = append(lines, fmt.Sprintf("The visitor is currently in the %q perspective on route %q, and you are answering in %s.", role, route, lang.Name()))
 	if conversationID != "" && !hasFeedback(ctx, deps, conversationID) {
 		lines = append(lines, "This visitor has not given concrete feedback in this conversation yet. Unless their latest message already is feedback, close your answer with one short, specific question about what confused them, what is missing, or what broke.")
 	}
+	lines = append(lines, i18n.AnswerIn(lang))
 	return strings.Join(lines, "\n")
 }
 
@@ -209,9 +308,9 @@ func trimHistory(msgs []model.ChatMessage, budget int) []model.ChatMessage {
 
 // chatMessages rebuilds the LLM request history from stored turns: a system
 // prompt followed by the trimmed, ordered user/assistant exchange.
-func chatMessages(ctx context.Context, deps app.Deps, convID, role, route string) []llm.Message {
+func chatMessages(ctx context.Context, deps app.Deps, convID, role, route string, lang i18n.Lang) []llm.Message {
 	history, _ := deps.Store.ListMessages(ctx, convID)
-	msgs := []llm.Message{{Role: "system", Content: SystemPrompt(ctx, deps, role, route, convID)}}
+	msgs := []llm.Message{{Role: "system", Content: SystemPrompt(ctx, deps, role, route, convID, lang)}}
 	for _, m := range trimHistory(history, historyTokenBudget) {
 		if m.Role == "user" || m.Role == "assistant" {
 			msgs = append(msgs, llm.Message{Role: m.Role, Content: m.Content})
@@ -242,6 +341,7 @@ func (h *Handler) message(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	lang := i18n.Detect(r)
 	convID := r.FormValue("conversation")
 	role := r.FormValue("role")
 	route := r.FormValue("route")
@@ -253,15 +353,15 @@ func (h *Handler) message(w http.ResponseWriter, r *http.Request) {
 
 	_, _ = h.deps.Store.AppendMessage(ctx, model.ChatMessage{ConversationID: convID, Role: "user", Content: text})
 
-	msgs := chatMessages(ctx, h.deps, convID, role, route)
+	msgs := chatMessages(ctx, h.deps, convID, role, route, lang)
 
 	answer := ""
 	resp, err := h.deps.LLM.Chat(ctx, llm.Request{Messages: msgs, MaxTokens: 1024, Temperature: 0.4})
 	switch {
 	case err != nil:
-		answer = "The local model did not answer: " + err.Error()
+		answer = fmt.Sprintf(lt(lang, "error.noAnswer"), err.Error())
 	case strings.TrimSpace(resp.Content) == "":
-		answer = "The local model returned an empty answer (finish reason: " + resp.FinishReason + ")."
+		answer = fmt.Sprintf(lt(lang, "error.empty"), resp.FinishReason)
 	default:
 		answer = strings.TrimSpace(resp.Content)
 		if _, err := h.deps.Store.AppendMessage(ctx, model.ChatMessage{ConversationID: convID, Role: "assistant", Content: answer, Reasoning: resp.Reasoning}); err == nil {
@@ -270,8 +370,8 @@ func (h *Handler) message(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writeBubble(w, "user", text)
-	writeBubble(w, "assistant", answer)
+	writeBubble(w, "user", text, lang)
+	writeBubble(w, "assistant", answer, lang)
 }
 
 // turn is the SSE kick-off: it persists the user turn and returns the user
@@ -279,6 +379,7 @@ func (h *Handler) message(w http.ResponseWriter, r *http.Request) {
 // extension, so the answer types itself in.
 func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	lang := i18n.Detect(r)
 	q := r.URL.Query()
 	convID := q.Get("conversation")
 	role := q.Get("role")
@@ -300,15 +401,16 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 	}.Encode()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writeBubble(w, "user", text)
-	fmt.Fprintf(w, `<div class="mm-msg mm" hx-ext="sse" sse-connect="%s" sse-swap="message" sse-close="done" hx-target="find p" hx-swap="beforeend"><span class="mm-who">assistant</span><p></p></div>`,
-		html.EscapeString(streamURL))
+	writeBubble(w, "user", text, lang)
+	fmt.Fprintf(w, `<div class="mm-msg mm" hx-ext="sse" sse-connect="%s" sse-swap="message" sse-close="done" hx-target="find p" hx-swap="beforeend"><span class="mm-who">%s</span><p></p></div>`,
+		html.EscapeString(streamURL), html.EscapeString(lt(lang, "bubble.assistant")))
 }
 
 // stream answers a turn already persisted by turn as server-sent events: one
 // "message" event per chunk, then a "done" event that closes the connection.
 func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	lang := i18n.Detect(r)
 	q := r.URL.Query()
 	convID := q.Get("conversation")
 	role := q.Get("role")
@@ -335,7 +437,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msgs := chatMessages(ctx, h.deps, convID, role, route)
+	msgs := chatMessages(ctx, h.deps, convID, role, route, lang)
 
 	var answer, reasoning strings.Builder
 	streamErr := h.deps.LLM.Stream(ctx, llm.Request{Messages: msgs, MaxTokens: 1024, Temperature: 0.4}, func(d llm.Delta) error {
@@ -355,7 +457,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 
 	final := strings.TrimSpace(answer.String())
 	if final == "" && streamErr != nil && ctx.Err() == nil {
-		msg := "The local model did not answer: " + streamErr.Error()
+		msg := fmt.Sprintf(lt(lang, "error.noAnswer"), streamErr.Error())
 		writeSSE(w, "message", html.EscapeString(msg))
 		flusher.Flush()
 		return
@@ -388,9 +490,14 @@ func writeSSE(w http.ResponseWriter, event, data string) {
 
 // writeBubble renders one message in the shared thread primitives, so an
 // assistant answer sits in the same conversation as onboarding and search.
-func writeBubble(w http.ResponseWriter, role, text string) {
+// The CSS class stays the raw role ("user"/"assistant", matching the history
+// partial below) while the visible tag is localized.
+// writeBubble renders one message in the shared thread primitives, so an
+// assistant answer sits in the same conversation as onboarding and search.
+// The role label is localized; the class names are the design system's.
+func writeBubble(w http.ResponseWriter, role, text string, lang i18n.Lang) {
 	fmt.Fprintf(w, `<div class="mm-msg %s"><span class="mm-who">%s</span><p>%s</p></div>`,
-		bubbleClass(role), html.EscapeString(role), html.EscapeString(text))
+		bubbleClass(role), html.EscapeString(lt(lang, "bubble."+role)), html.EscapeString(text))
 }
 
 func bubbleClass(role string) string {
@@ -418,7 +525,8 @@ func (h *Handler) Ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// turn reads its inputs from the query string; hand it a request carrying
-	// the resolved conversation.
+	// the resolved conversation. Cookies (and so the language) are preserved
+	// by Clone, so turn's own i18n.Detect still sees the visitor's language.
 	q := url.Values{
 		"conversation": {conv.ID},
 		"role":         {role},
@@ -441,6 +549,7 @@ func (h *Handler) feedback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	lang := i18n.Detect(r)
 	text := strings.TrimSpace(r.FormValue("verbatim"))
 	if text == "" {
 		w.WriteHeader(http.StatusNoContent)
@@ -462,7 +571,7 @@ func (h *Handler) feedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<div class="feedback-thanks">Logged. It will show up in the <a href="/dev">dev loop</a>.</div>`)
+	fmt.Fprintf(w, `<div class="feedback-thanks">%s <a href="/dev">%s</a></div>`, i18n.T(lang, "feedback.thanks"), i18n.T(lang, "nav.dev"))
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -488,7 +597,9 @@ const extractionSchema = `[{"kind":"bug|confusion|request|praise","theme":"short
 // Extract is the hook the dev loop uses to mine a conversation for feedback.
 // It runs a cheap LLM pass over the conversation's recent turns, never
 // invents feedback (an empty array is the normal case), and skips anything
-// that duplicates feedback already logged for this conversation.
+// that duplicates feedback already logged for this conversation. The
+// transcript may be German or English (or mixed); verbatim is always kept in
+// whatever language the visitor actually wrote it in.
 func Extract(ctx context.Context, deps app.Deps, conversationID string) ([]model.Feedback, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -515,9 +626,15 @@ func Extract(ctx context.Context, deps app.Deps, conversationID string) ([]model
 	// A single user turn, not a leading system message: this model's chat
 	// template garbles output when a system message sandwiches a user
 	// message before llm.Client.JSON appends its own trailing system
-	// instruction (verified directly against the live endpoint).
+	// instruction (verified directly against the live endpoint). The language
+	// guidance below therefore rides in this same user message rather than in
+	// a separate i18n.AnswerIn system turn.
 	prompt := []llm.Message{
-		{Role: "user", Content: "You mine app feedback out of a support chat transcript. Only extract feedback the USER actually expressed about the app itself: bugs, confusion, feature requests or praise. Never invent feedback the user did not give — if there is none, answer with an empty array. Each item's verbatim field must be the user's own words, not a paraphrase.\n\nTranscript:\n" + transcript.String()},
+		{Role: "user", Content: "You mine app feedback out of a support chat transcript, which may be in German or English. " +
+			"Only extract feedback the USER actually expressed about the app itself: bugs, confusion, feature requests or praise. " +
+			"Never invent feedback the user did not give — if there is none, answer with an empty array. " +
+			"Each item's verbatim field must be the user's own words, copied exactly in whatever language they wrote them in — never translate it, a German complaint stays German. " +
+			"theme is always a short English slug (e.g. upload-fails), regardless of the transcript's language, so themes cluster across languages.\n\nTranscript:\n" + transcript.String()},
 	}
 	var extracted []extractedFeedback
 	if err := deps.LLM.JSON(ctx, llm.Request{Messages: prompt, MaxTokens: 768, Temperature: 0.1}, extractionSchema, &extracted); err != nil {

@@ -18,10 +18,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/onboarding"
@@ -80,11 +82,19 @@ func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) (mod
 		Confidence float64  `json:"confidence"`
 	}
 	system := "You turn one sentence from a construction professional into a search intent. " +
+		"The sentence may be in English or German (the DACH construction market's working language). " +
 		"Only fill fields the sentence supports; leave the rest empty. " +
 		"trades must come from: " + strings.Join(knownTrades, ", ") + ". " +
 		"statuses must come from: " + strings.Join(knownStatus, ", ") + ". " +
 		"documents must come from: " + strings.Join(knownDocs, ", ") + ". " +
-		"Ignore anything the sentence explicitly negates (\"not Vienna\") — never put a negated word in trades or regions."
+		"German surface forms map onto those same slugs: Elektro/Elektriker=electrical, " +
+		"Sanitär/Klempner=sanitary, Stahlbau/Stahlbauer=steel, Innenausbau=interior, " +
+		"Energietechnik/Photovoltaik=energy, Trockenbau=drywall, Heizung/Klima/Lüftung=hvac; " +
+		"A1-Bescheinigung=a1, Versicherung/Haftpflicht=insurance, Nachweise/Zertifikate=certificates, " +
+		"Steuerunterlagen=tax; offen=open, angefragt=requested, in Arbeit/laufend=process, abgeschlossen=done; " +
+		"Kolonne=crew, Monteur=fitter. " +
+		"Ignore anything the sentence explicitly negates (\"not Vienna\"/\"nicht Wien\") — never put a " +
+		"negated word in trades or regions."
 	if p.Role != "" && p.Role != "unknown" {
 		system += fmt.Sprintf(" The person is a %q; default kind accordingly (owner looks for crews, executor looks for offers).", p.Role)
 	}
@@ -113,40 +123,64 @@ func Parse(ctx context.Context, deps app.Deps, raw string, p model.Profile) (mod
 		BudgetHint: strings.TrimSpace(got.BudgetHint),
 		Confidence: got.Confidence,
 	}
+	// Kind is left as the model reported it, including empty: an intent
+	// with no clear side isn't defaulted to offers here, so WantsOffers/
+	// WantsCrews can fall back to the profile instead of a guess baked in
+	// at parse time.
 	if intent.Kind == "" {
-		intent.Kind = "find_offers"
+		intent.Kind = inferKind(raw)
 	}
 	return finishParse(intent, fc), fc
 }
 
 // finishParse strips anything the sentence explicitly negated out of the
 // positive facet lists, regardless of which path (model or mechanical) put
-// it there.
+// it there, and normalizes region names onto the form the corpus uses
+// (English or German surface form -> the corpus's own spelling), so an
+// English "Munich" and a German "München" narrow the same offers.
 func finishParse(intent model.Intent, fc facets) model.Intent {
 	intent.Trades = stripNegated(intent.Trades, fc.ExcludeTrades)
 	intent.Regions = stripNegated(intent.Regions, fc.ExcludeRegions)
+	for i, r := range intent.Regions {
+		intent.Regions[i] = normalizeRegion(r)
+	}
 	return intent
 }
 
 // ParseMechanical is the no-model path: keyword spotting only, flagged so the
-// UI can admit it is running degraded.
+// UI can admit it is running degraded. It recognizes the same vocabulary in
+// English and German (see lang.go's synonym tables), so a visitor without a
+// working model still gets a real answer in either language.
 func ParseMechanical(raw string) model.Intent {
 	low := strings.ToLower(raw)
-	intent := model.Intent{Raw: raw, Kind: "find_offers", Fallback: true, Confidence: 0.3}
-	for _, t := range knownTrades {
-		if strings.Contains(low, t) {
-			intent.Trades = append(intent.Trades, t)
+	intent := model.Intent{Raw: raw, Kind: inferKind(raw), Fallback: true, Confidence: 0.3}
+	for slug, syns := range tradeSynonyms {
+		for _, s := range syns {
+			if strings.Contains(low, s) {
+				intent.Trades = append(intent.Trades, slug)
+				break
+			}
 		}
 	}
-	for _, d := range knownDocs {
-		if strings.Contains(low, d) {
-			intent.Documents = append(intent.Documents, d)
+	for slug, syns := range docSynonyms {
+		for _, s := range syns {
+			if strings.Contains(low, s) {
+				intent.Documents = append(intent.Documents, slug)
+				break
+			}
 		}
 	}
-	for _, s := range knownStatus {
-		if strings.Contains(low, s) {
-			intent.Statuses = append(intent.Statuses, s)
+	for slug, syns := range statusSynonyms {
+		for _, s := range syns {
+			if strings.Contains(low, s) {
+				intent.Statuses = append(intent.Statuses, slug)
+				break
+			}
 		}
+	}
+	intent.Regions = extractRegions(low)
+	if n, ok := parseCrewSize(raw); ok {
+		intent.CrewSize = n
 	}
 	intent.Keywords = strings.Fields(low)
 	return intent
@@ -185,10 +219,18 @@ type Result struct {
 	Widen   widenInfo
 }
 
-// Search runs the filter/widen/rank pipeline for an already-parsed intent.
-// Split out from Run so a refine chip can override one facet and re-run
-// this without asking the model to parse the sentence again.
-func Search(ctx context.Context, deps app.Deps, intent model.Intent, fc facets, p model.Profile) (Result, error) {
+// Search runs the filter/widen/rank pipeline for an already-parsed intent,
+// against the offer side only. Split out from Run so a refine chip can
+// override one facet and re-run this without asking the model to parse the
+// sentence again.
+//
+// Ranking blends three signals into one score, each contributing its own Why
+// line (see Rank): the facet filters this function applies (correctness —
+// does the row actually satisfy what was asked), store.TextSearch's
+// relevance ranking over the free-text query (does the row's own text match
+// what was typed), and the profile boosts (personalization). The model never
+// sees these rows; it only helped produce intent.
+func Search(ctx context.Context, deps app.Deps, intent model.Intent, fc facets, p model.Profile, lang i18n.Lang) (Result, error) {
 	base := store.OfferFilter{
 		Trades:       intent.Trades,
 		Regions:      intent.Regions,
@@ -204,19 +246,79 @@ func Search(ctx context.Context, deps app.Deps, intent model.Intent, fc facets, 
 
 	var widen widenInfo
 	if len(offers) == 0 {
-		offers, widen, err = widenSearch(ctx, deps, base, fc)
+		offers, widen, err = widenSearch(ctx, deps, base, fc, lang)
 		if err != nil {
 			return Result{}, err
 		}
 	}
-	return Result{Intent: intent, Facets: fc, Matches: Rank(offers, intent, fc, p), Widen: widen}, nil
+	textScores := textRelevance(ctx, deps, intent.Raw, "offer")
+	return Result{Intent: intent, Facets: fc, Matches: Rank(offers, intent, fc, p, textScores, lang), Widen: widen}, nil
 }
 
-// Run is the whole pipeline: parse, then Search. Exported so the assistant and
-// any future surface can search without going through HTTP.
-func Run(ctx context.Context, deps app.Deps, raw string, p model.Profile) (Result, error) {
+// textRelevance asks the text index for a free-text relevance signal over
+// one kind (offer or crew) and normalizes it to 0..1 (best hit = 1), so Rank
+// and RankCrews can weigh it against the fixed-point facet/profile bonuses
+// without caring about store.TextHit.Score's raw scale. A blank query or an
+// index with nothing to say returns nil, which Rank treats as "no relevance
+// signal" rather than a zero score.
+func textRelevance(ctx context.Context, deps app.Deps, text, kind string) map[string]float64 {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	hits, err := deps.Store.TextSearch(ctx, store.TextQuery{Text: text, Kinds: []string{kind}, Limit: 200})
+	if err != nil || len(hits) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(hits))
+	max := 0.0
+	for _, h := range hits {
+		out[h.ID] = h.Score
+		if h.Score > max {
+			max = h.Score
+		}
+	}
+	if max <= 0 {
+		return nil
+	}
+	for id := range out {
+		out[id] /= max
+	}
+	return out
+}
+
+// runSides fetches whichever side(s) of the market the intent and profile
+// call for — offers, crews, or both — and merges them into one Fit-sorted
+// list with the kind visible on every match (model.Match.Kind). This is what
+// "one ranked list across both sides" means in practice: WantsOffers and
+// WantsCrews are not mutually exclusive.
+func runSides(ctx context.Context, deps app.Deps, intent model.Intent, fc facets, p model.Profile, lang i18n.Lang) (Result, error) {
+	result := Result{Intent: intent, Facets: fc}
+	if WantsOffers(intent, p) {
+		r, err := Search(ctx, deps, intent, fc, p, lang)
+		if err != nil {
+			return Result{}, err
+		}
+		result.Matches = append(result.Matches, r.Matches...)
+		result.Widen = r.Widen
+	}
+	if WantsCrews(intent, p) {
+		crewMatches, err := RunCrews(ctx, deps, intent, p, lang)
+		if err != nil {
+			return Result{}, err
+		}
+		result.Matches = append(result.Matches, crewMatches...)
+	}
+	sort.SliceStable(result.Matches, func(i, j int) bool { return result.Matches[i].Fit > result.Matches[j].Fit })
+	return result, nil
+}
+
+// Run is the whole pipeline: parse, then search whichever side(s) apply.
+// Exported so the assistant and any future surface can search without going
+// through HTTP.
+func Run(ctx context.Context, deps app.Deps, raw string, p model.Profile, lang i18n.Lang) (Result, error) {
 	intent, fc := Parse(ctx, deps, raw, p)
-	return Search(ctx, deps, intent, fc, p)
+	return runSides(ctx, deps, intent, fc, p, lang)
 }
 
 // --- handlers ---------------------------------------------------------------
@@ -232,10 +334,17 @@ type resultsView struct {
 	Chips     []chip
 	StreamURL string
 	Fallback  string
+	Lang      i18n.Lang
 }
 
 // Query answers a natural-language search and renders the result cards. It is
 // exported so the /ask router can send a known visitor straight here.
+//
+// The visitor's own language (from i18n.Detect, cookie first then
+// Accept-Language then the DE default) drives every user-facing string this
+// handler produces — the Why lines, the fallback summary, the refine chips,
+// the widening notice — independent of whatever language the query itself
+// was typed in.
 func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(firstNonEmpty(r.FormValue("message"), r.FormValue("q"), r.URL.Query().Get("q")))
 	if raw == "" {
@@ -243,6 +352,7 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, _ := onboarding.Current(r, h.deps)
+	lang := i18n.Detect(r)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
@@ -251,22 +361,10 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 	if rf, ok := parseRefine(r.FormValue("refine")); ok {
 		intent = applyRefine(intent, rf)
 	}
-	result, err := Search(ctx, h.deps, intent, fc, p)
+	result, err := runSides(ctx, h.deps, intent, fc, p, lang)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	// A Generalunternehmer asking for people wants the supply side: crews,
-	// not more job postings.
-	if WantsCrews(result.Intent, p) {
-		crewMatches, crewErr := RunCrews(ctx, h.deps, result.Intent, p)
-		if crewErr != nil {
-			http.Error(w, crewErr.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(crewMatches) > 0 {
-			result.Matches = crewMatches
-		}
 	}
 
 	display := result.Matches
@@ -290,9 +388,10 @@ func (h *Handler) Query(w http.ResponseWriter, r *http.Request) {
 		Query:     raw,
 		Degraded:  result.Intent.Fallback,
 		Widen:     result.Widen,
-		Chips:     buildChips(result.Matches, result.Intent),
+		Chips:     buildChips(result.Matches, result.Intent, lang),
 		StreamURL: streamURL,
-		Fallback:  mechanicalSummary(raw, result.Intent, brief),
+		Fallback:  mechanicalSummary(raw, result.Intent, brief, lang),
+		Lang:      lang,
 	}
 	if err := h.tpl.ExecuteTemplate(w, "results", view); err != nil {
 		log.Printf("search: render results: %v", err)
@@ -322,7 +421,7 @@ func (h *Handler) save(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeBadge(w, "good", "saved")
+	writeBadge(w, "good", i18n.T(i18n.Detect(r), "search.saved"))
 }
 
 func firstNonEmpty(vals ...string) string {

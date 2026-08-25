@@ -7,13 +7,18 @@ import (
 )
 
 // SeedOffers is the initial pipeline content, inserted on first boot.
+// SeedOffers is the initial pipeline content, inserted on first boot.
+//
+// The app is German-first, so the seed is German. The demo package adds the
+// wider market on top of this; these four ids predate it and are kept so an
+// existing installation keeps its history.
 func SeedOffers() []model.Offer {
 	now := time.Now()
 	return []model.Offer{
-		{ID: "MM-1842", Title: "Photovoltaic roof installation", Location: "Munich, DE", Category: "Energy", Amount: "420 panels", Budget: "EUR 146k", Status: "process", Signal: "Attention", Supplier: "Voltwerk GmbH", Progress: 68, Trade: "energy", Region: "Munich, DE", CrewSize: 8, Requirements: []string{"a1", "insurance"}, Languages: []string{"de", "en"}, Attention: "3 requests need document expiry checks", CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now.Add(-12 * time.Minute)},
-		{ID: "MM-1841", Title: "Retail floor refit", Location: "Zurich, CH", Category: "Interior", Amount: "1,800 m2", Budget: "EUR 82k", Status: "requested", Signal: "OK", Supplier: "Alpine Montage", Progress: 36, Trade: "interior", Region: "Zurich, CH", CrewSize: 6, Requirements: []string{"a1"}, Languages: []string{"de"}, Attention: "5 supplier answers ready", CreatedAt: now.Add(-96 * time.Hour), UpdatedAt: now.Add(-38 * time.Minute)},
-		{ID: "MM-1838", Title: "Warehouse steel assembly", Location: "Rotterdam, NL", Category: "Industrial", Amount: "96 tons", Budget: "EUR 310k", Status: "open", Signal: "OK", Supplier: "Nordline Build", Progress: 22, Trade: "steel", Region: "Rotterdam, NL", CrewSize: 12, Requirements: []string{"a1", "insurance", "certificates"}, Languages: []string{"nl", "en"}, Attention: "Hardware list confirmed", CreatedAt: now.Add(-120 * time.Hour), UpdatedAt: now.Add(-time.Hour)},
-		{ID: "MM-1832", Title: "Hotel bathroom modernization", Location: "Vienna, AT", Category: "Sanitary", Amount: "74 rooms", Budget: "EUR 228k", Status: "done", Signal: "Review", Supplier: "Prime Install", Progress: 100, Trade: "sanitary", Region: "Vienna, AT", CrewSize: 5, Requirements: []string{"a1"}, Languages: []string{"de"}, Attention: "Review window open", CreatedAt: now.Add(-400 * time.Hour), UpdatedAt: now.Add(-26 * time.Hour)},
+		{ID: "MM-1842", Title: "Photovoltaik-Dachmontage", Location: "München, DE", Category: "Energietechnik", Amount: "420 Module", Budget: "EUR 146k", Status: "process", Signal: "Attention", Supplier: "Voltwerk GmbH", Progress: 68, Attention: "Drei Anfragen brauchen eine Prüfung der Dokumenten-Laufzeit", Trade: "energy", Region: "München, DE", CrewSize: 8, Requirements: []string{"a1", "insurance"}, Languages: []string{"de", "en"}, CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now.Add(-12 * time.Minute)},
+		{ID: "MM-1841", Title: "Ladenbau Umbau", Location: "Zürich, CH", Category: "Innenausbau", Amount: "1.800 m²", Budget: "EUR 82k", Status: "requested", Signal: "OK", Supplier: "Alpine Montage", Progress: 36, Attention: "Fünf Rückmeldungen von Nachunternehmern liegen vor", Trade: "interior", Region: "Zürich, CH", CrewSize: 6, Requirements: []string{"a1"}, Languages: []string{"de"}, CreatedAt: now.Add(-96 * time.Hour), UpdatedAt: now.Add(-38 * time.Minute)},
+		{ID: "MM-1838", Title: "Stahlbau Lagerhalle", Location: "Rotterdam, NL", Category: "Stahlbau", Amount: "96 t", Budget: "EUR 310k", Status: "open", Signal: "OK", Supplier: "Nordline Build", Progress: 22, Attention: "Materialliste bestätigt, Kolonne gesucht", Trade: "steel", Region: "Rotterdam, NL", CrewSize: 12, Requirements: []string{"a1", "insurance", "certificates"}, Languages: []string{"nl", "en"}, CreatedAt: now.Add(-120 * time.Hour), UpdatedAt: now.Add(-time.Hour)},
+		{ID: "MM-1832", Title: "Hotelbäder Sanierung", Location: "Wien, AT", Category: "Sanitär", Amount: "74 Zimmer", Budget: "EUR 228k", Status: "done", Signal: "Review", Supplier: "Prime Install", Progress: 100, Attention: "Abnahmefenster offen, Bewertung ausstehend", Trade: "sanitary", Region: "Wien, AT", CrewSize: 5, Requirements: []string{"a1"}, Languages: []string{"de"}, CreatedAt: now.Add(-400 * time.Hour), UpdatedAt: now.Add(-26 * time.Hour)},
 	}
 }
 

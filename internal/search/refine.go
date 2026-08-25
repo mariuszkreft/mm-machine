@@ -3,6 +3,7 @@ package search
 import (
 	"strings"
 
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/model"
 )
 
@@ -18,19 +19,21 @@ const maxChips = 6
 
 // buildChips looks at the actual ranked result set — not the whole
 // catalogue — and offers the facets it finds that the intent didn't already
-// ask for: other trades present, nearby regions, adjacent statuses.
-func buildChips(all []model.Match, intent model.Intent) []chip {
+// ask for: other trades present, nearby regions, adjacent statuses. Labels
+// are rendered in lang; the Refine value stays the raw slug/name so clicking
+// the chip still overrides the right facet regardless of display language.
+func buildChips(all []model.Match, intent model.Intent, lang i18n.Lang) []chip {
 	chips := []chip{}
-	chips = append(chips, tradeChips(all, intent)...)
-	chips = append(chips, regionChips(all, intent)...)
-	chips = append(chips, statusChips(all, intent)...)
+	chips = append(chips, tradeChips(all, intent, lang)...)
+	chips = append(chips, regionChips(all, intent, lang)...)
+	chips = append(chips, statusChips(all, intent, lang)...)
 	if len(chips) > maxChips {
 		chips = chips[:maxChips]
 	}
 	return chips
 }
 
-func tradeChips(all []model.Match, intent model.Intent) []chip {
+func tradeChips(all []model.Match, intent model.Intent, lang i18n.Lang) []chip {
 	seen := map[string]bool{}
 	out := []chip{}
 	for _, m := range all {
@@ -39,12 +42,12 @@ func tradeChips(all []model.Match, intent model.Intent) []chip {
 			continue
 		}
 		seen[t] = true
-		out = append(out, chip{Label: "also see " + t, Refine: "set:trade:" + t})
+		out = append(out, chip{Label: tr(lang, "search.chip.alsoSee", i18n.T(lang, "trade."+t)), Refine: "set:trade:" + t})
 	}
 	return out
 }
 
-func regionChips(all []model.Match, intent model.Intent) []chip {
+func regionChips(all []model.Match, intent model.Intent, lang i18n.Lang) []chip {
 	seen := map[string]bool{}
 	out := []chip{}
 	for _, m := range all {
@@ -56,12 +59,12 @@ func regionChips(all []model.Match, intent model.Intent) []chip {
 			continue
 		}
 		seen[r] = true
-		out = append(out, chip{Label: "near " + r, Refine: "set:region:" + r})
+		out = append(out, chip{Label: tr(lang, "search.chip.near", r), Refine: "set:region:" + r})
 	}
 	return out
 }
 
-func statusChips(all []model.Match, intent model.Intent) []chip {
+func statusChips(all []model.Match, intent model.Intent, lang i18n.Lang) []chip {
 	seen := map[string]bool{}
 	out := []chip{}
 	for _, m := range all {
@@ -70,7 +73,7 @@ func statusChips(all []model.Match, intent model.Intent) []chip {
 			continue
 		}
 		seen[s] = true
-		out = append(out, chip{Label: "status: " + s, Refine: "set:status:" + s})
+		out = append(out, chip{Label: tr(lang, "search.chip.status", i18n.T(lang, "offer.status."+s)), Refine: "set:status:" + s})
 	}
 	return out
 }

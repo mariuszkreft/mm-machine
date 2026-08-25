@@ -98,46 +98,35 @@ func (m *Memory) UpsertCrew(_ context.Context, c model.Crew) (model.Crew, error)
 	return c, nil
 }
 
-// TextSearch on the memory store is a substring scan with a crude score. The
-// SQLite store answers the same query out of an FTS index; both must rank the
-// obvious matches first.
+// TextSearch on the memory store is a substring/prefix scan approximating
+// the SQLite store's FTS5 index (see textsearch.go): both share expandTerms,
+// scoreOffer and scoreCrew so the two backends rank the obvious matches the
+// same way.
 func (m *Memory) TextSearch(_ context.Context, q TextQuery) ([]TextHit, error) {
-	terms := strings.Fields(strings.ToLower(q.Text))
-	if len(terms) == 0 {
+	terms, extra := expandTerms(q.Text)
+	if len(terms) == 0 && len(extra) == 0 {
 		return []TextHit{}, nil
 	}
-	wantKind := func(kind string) bool {
-		if len(q.Kinds) == 0 {
-			return true
-		}
-		for _, k := range q.Kinds {
-			if k == kind {
-				return true
-			}
-		}
-		return false
-	}
+	wantKind := wantTextKind(q.Kinds)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	hits := []TextHit{}
 	if wantKind("offer") {
 		for _, o := range m.offers {
-			doc := strings.ToLower(strings.Join([]string{o.Title, o.Location, o.Category, o.Supplier, o.Trade, o.Region, o.Attention, strings.Join(o.Requirements, " ")}, " "))
-			if score := scoreDoc(doc, terms); score > 0 {
-				hits = append(hits, TextHit{Kind: "offer", ID: o.ID, Score: score, Snippet: o.Title})
+			if score, title := scoreOffer(o, terms, extra); score > 0 {
+				hits = append(hits, TextHit{Kind: "offer", ID: o.ID, Score: score, Snippet: title})
 			}
 		}
 	}
 	if wantKind("crew") {
 		for _, c := range m.crews {
-			doc := strings.ToLower(strings.Join([]string{c.Name, c.Company, strings.Join(c.Trades, " "), strings.Join(c.Regions, " "), c.Note, strings.Join(c.Documents, " ")}, " "))
-			if score := scoreDoc(doc, terms); score > 0 {
-				hits = append(hits, TextHit{Kind: "crew", ID: c.ID, Score: score, Snippet: c.Name})
+			if score, name := scoreCrew(c, terms, extra); score > 0 {
+				hits = append(hits, TextHit{Kind: "crew", ID: c.ID, Score: score, Snippet: name})
 			}
 		}
 	}
-	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	sortHits(hits)
 	if q.Limit > 0 && len(hits) > q.Limit {
 		hits = hits[:q.Limit]
 	}

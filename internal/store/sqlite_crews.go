@@ -5,15 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"mm-machine/internal/model"
 )
 
-// Crews live in their own table. The full-text index over crews and offers is
-// the store worker's job; until it lands, TextSearch answers out of SQL with
-// LIKE and the shared scoring helper, so callers see the same shape either way.
+// Crews live in their own table. TextSearch (FTS5-backed) lives in
+// textsearch.go; this file only holds crew CRUD.
 const crewSchema = `
 CREATE TABLE IF NOT EXISTS crews (
     id             TEXT PRIMARY KEY,
@@ -136,59 +134,4 @@ ON CONFLICT(id) DO UPDATE SET
 		return model.Crew{}, fmt.Errorf("store: upsert crew: %w", err)
 	}
 	return c, nil
-}
-
-// TextSearch scans both corpora with LIKE and scores with the shared helper.
-// The store worker replaces the body with an FTS5 query; the contract — hits
-// ordered by descending score — must not change.
-func (s *SQLite) TextSearch(ctx context.Context, q TextQuery) ([]TextHit, error) {
-	terms := strings.Fields(strings.ToLower(q.Text))
-	if len(terms) == 0 {
-		return []TextHit{}, nil
-	}
-	if err := s.ensureCrewTables(); err != nil {
-		return nil, err
-	}
-	wantKind := func(kind string) bool {
-		if len(q.Kinds) == 0 {
-			return true
-		}
-		for _, k := range q.Kinds {
-			if k == kind {
-				return true
-			}
-		}
-		return false
-	}
-
-	hits := []TextHit{}
-	if wantKind("offer") {
-		offers, err := s.ListOffers(ctx, OfferFilter{})
-		if err != nil {
-			return nil, err
-		}
-		for _, o := range offers {
-			doc := strings.ToLower(strings.Join([]string{o.Title, o.Location, o.Category, o.Supplier, o.Trade, o.Region, o.Attention, strings.Join(o.Requirements, " ")}, " "))
-			if score := scoreDoc(doc, terms); score > 0 {
-				hits = append(hits, TextHit{Kind: "offer", ID: o.ID, Score: score, Snippet: o.Title})
-			}
-		}
-	}
-	if wantKind("crew") {
-		crews, err := s.ListCrews(ctx, CrewFilter{})
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range crews {
-			doc := strings.ToLower(strings.Join([]string{c.Name, c.Company, strings.Join(c.Trades, " "), strings.Join(c.Regions, " "), c.Note, strings.Join(c.Documents, " ")}, " "))
-			if score := scoreDoc(doc, terms); score > 0 {
-				hits = append(hits, TextHit{Kind: "crew", ID: c.ID, Score: score, Snippet: c.Name})
-			}
-		}
-	}
-	sortHits(hits)
-	if q.Limit > 0 && len(hits) > q.Limit {
-		hits = hits[:q.Limit]
-	}
-	return hits, nil
 }

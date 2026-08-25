@@ -1,9 +1,9 @@
 # Backlog
 
-- Generated: 2026-08-25T20:08:35Z
+- Generated: 2026-08-25T22:23:23Z
 - Model: deepseek-v4-flash-0731
 
-## 1. Improve mobile filter discoverability
+## 1. Improve filter visibility on mobile order list
 
 - Score: 2.00
 - Count: 1
@@ -13,10 +13,10 @@
 - Status: proposed
 - Feedback ids: 1
 
-Users cannot easily locate pipeline filters on mobile, leading to confusion and reduced usability.
+Users on mobile can't easily find filters, causing confusion and reduced usability.
 
 Evidence:
-> The pipeline filters are not obvious on mobile.
+> Die Filter in der Auftragsliste sind auf dem Handy schwer zu finden.
 
 ---
 

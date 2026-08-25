@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 )
@@ -51,20 +52,27 @@ func mentionsUnlisted(text string, allowed map[string]bool) bool {
 // mechanicalSummary is the deterministic, always-truthful line: it never
 // names anything outside brief, because it is built only from brief. It is
 // both the no-model fallback and the safety net when the streamed answer
-// tries to introduce a result that isn't there.
-func mechanicalSummary(query string, intent model.Intent, brief []briefMatch) string {
+// tries to introduce a result that isn't there. lang picks the visitor's
+// language, independent of whatever language the query itself was in.
+func mechanicalSummary(query string, intent model.Intent, brief []briefMatch, lang i18n.Lang) string {
 	if len(brief) == 0 {
-		return "Nothing matches that yet."
+		return i18n.T(lang, "search.nothing")
 	}
-	parts := []string{fmt.Sprintf("%d match%s", len(brief), plural(len(brief)))}
+	var head string
+	if lang == i18n.DE {
+		head = fmt.Sprintf("%d %s", len(brief), i18n.T(lang, "search.matches"))
+	} else {
+		head = fmt.Sprintf("%d match%s", len(brief), plural(len(brief)))
+	}
+	parts := []string{head}
 	if len(intent.Trades) > 0 {
-		parts = append(parts, "for "+strings.Join(intent.Trades, ", "))
+		parts = append(parts, tr(lang, "search.summary.for", strings.Join(intent.Trades, ", ")))
 	}
 	if len(intent.Regions) > 0 {
-		parts = append(parts, "in "+strings.Join(intent.Regions, ", "))
+		parts = append(parts, tr(lang, "search.summary.in", strings.Join(intent.Regions, ", ")))
 	}
 	best := brief[0]
-	return strings.Join(parts, " ") + fmt.Sprintf(". Best fit: %s (%d%%) — %s.", best.Title, best.Fit, best.Reason)
+	return strings.Join(parts, " ") + fmt.Sprintf(". %s: %s (%d%%) — %s.", i18n.T(lang, "search.bestFit"), best.Title, best.Fit, best.Reason)
 }
 
 func plural(n int) string {
@@ -82,6 +90,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 	query := q.Get("q")
+	lang := i18n.Detect(r)
 
 	var brief []briefMatch
 	_ = json.Unmarshal([]byte(q.Get("matches")), &brief)
@@ -106,13 +115,13 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}()
 
-	fallback := mechanicalSummary(query, intent, brief)
+	fallback := mechanicalSummary(query, intent, brief, lang)
 	if h.deps.LLM == nil || len(brief) == 0 || ctx.Err() != nil {
 		emitWords(w, flusher, fallback)
 		return
 	}
 
-	text := h.narrate(ctx, query, brief)
+	text := h.narrate(ctx, query, brief, lang)
 	if text == "" || mentionsUnlisted(text, allowedIDs(brief)) {
 		text = fallback
 	}
@@ -127,11 +136,11 @@ func allowedIDs(brief []briefMatch) map[string]bool {
 	return allowed
 }
 
-// narrate asks the model for one sentence over the given matches. The whole
-// answer is buffered here — never forwarded delta by delta — so nothing
-// unvalidated ever reaches the client; emitWords re-streams it once it has
-// passed mentionsUnlisted.
-func (h *Handler) narrate(ctx context.Context, query string, brief []briefMatch) string {
+// narrate asks the model for one sentence over the given matches, in the
+// visitor's language (i18n.AnswerIn). The whole answer is buffered here —
+// never forwarded delta by delta — so nothing unvalidated ever reaches the
+// client; emitWords re-streams it once it has passed mentionsUnlisted.
+func (h *Handler) narrate(ctx context.Context, query string, brief []briefMatch, lang i18n.Lang) string {
 	briefJSON, err := json.Marshal(brief)
 	if err != nil {
 		return ""
@@ -139,7 +148,8 @@ func (h *Handler) narrate(ctx context.Context, query string, brief []briefMatch)
 	system := "You narrate search results for a construction marketplace in one short, plain sentence " +
 		"(max 30 words). You are given the visitor's query and a fixed JSON list of matches, each with " +
 		"an id, title, fit percentage and reason. Mention only offers from that list, by title. Never " +
-		"invent an id, a title or a match that isn't in the list. No markdown, no lists."
+		"invent an id, a title or a match that isn't in the list. No markdown, no lists. " +
+		i18n.AnswerIn(lang)
 	user := fmt.Sprintf("Query: %s\nMatches: %s", query, string(briefJSON))
 
 	var buf strings.Builder

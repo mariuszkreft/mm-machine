@@ -154,9 +154,16 @@ const (
 // Kept deliberately literal: a cheap wrong guess here costs one redirect, an
 // LLM classifier would cost a round-trip on every single prompt.
 var metaMarkers = []string{
+	// English
 	"how do i", "how does", "how can i", "what is this", "what can i", "what does this",
 	"who are you", "help", "explain", "why do", "why does", "bug", "broken", "not working",
 	"doesn't work", "does not work", "confus", "feedback", "suggest", "you should", "i wish",
+	// German — the default language, so these matter more than the English ones
+	"wie funktioniert", "wie geht", "wie macht ihr", "wie sucht", "was ist das", "was ist mm",
+	"was kann ich", "was macht", "was passiert mit", "wer seid ihr", "wozu", "warum",
+	"hilfe", "erklär", "erklar", "kaputt", "geht nicht", "funktioniert nicht", "fehler",
+	"verwirr", "unklar", "vorschlag", "ihr solltet", "ich wünsche", "ich wuensche",
+	"datenschutz", "meine daten", "meinen daten",
 }
 
 func route(message string, profile model.Profile) string {

@@ -1,15 +1,19 @@
 // Package onboarding turns a first visit into a profile, by conversation.
 //
 // First principle: never ask a human to fill in a taxonomy the machine can
-// infer. The visitor writes one sentence in their own words; the local model
-// extracts whatever fields it can see; onboarding only asks about what is
-// still genuinely unknown, one thing at a time — and never twice.
+// infer. The visitor writes one sentence in their own words — German or
+// English — the local model extracts whatever fields it can see; onboarding
+// only asks about what is still genuinely unknown, one thing at a time — and
+// never twice.
 //
 // A visitor can also correct a wrong inference in plain language ("no, we do
-// sanitary, not electrical"). That runs through a second extraction mode that
-// removes and replaces rather than merges. The confirmation card shown after
-// every turn is the same editable profile panel a visitor can reach any time
-// at /start/profile, so an inference is never more than one click from fixed.
+// sanitary, not electrical" / "nein, wir machen Sanitär, nicht Elektro").
+// That runs through a second extraction mode that removes and replaces
+// rather than merges. The confirmation card shown after every turn is the
+// same editable profile panel a visitor can reach any time at
+// /start/profile, so an inference is never more than one click from fixed —
+// and a visitor who would rather not answer at all can skip straight to
+// search.
 package onboarding
 
 import (
@@ -28,6 +32,7 @@ import (
 	"time"
 
 	"mm-machine/internal/app"
+	"mm-machine/internal/i18n"
 	"mm-machine/internal/llm"
 	"mm-machine/internal/model"
 	"mm-machine/internal/store"
@@ -107,42 +112,99 @@ func Current(r *http.Request, deps app.Deps) (model.Profile, bool) {
 	return p, true
 }
 
+// --- localization ------------------------------------------------------------
+//
+// Most user-visible strings come from the shared i18n catalog (the onboarding.*
+// and role/trade/doc keys already cover the questions, the "why" preamble, the
+// confirmation heading, "still missing" and the reset link). The catalog has
+// no dedicated key for a handful of short, onboarding-only fragments — the
+// completeness-meter labels, the skip/finish affordances, the streamed
+// acknowledgement's fallback sentence and the done-summary sentence — so
+// those stay in this package-local table instead (reported alongside this
+// change, per the task brief).
+var localLabel = map[i18n.Lang]map[string]string{
+	i18n.DE: {
+		"field.role": "Rolle", "field.trades": "Gewerke", "field.regions": "Region",
+		"field.crewSize": "Mannstärke", "field.documents": "Papiere", "field.availability": "Verfügbarkeit",
+		"turn.you": "Sie", "turn.mm": "mm",
+		"nudge.text":           "Zuletzt hat mir nichts Neues weitergeholfen — gerne weiter, oder:",
+		"nudge.button":         "reicht so, weiter geht's",
+		"skip.link":            "Ohne weitere Angaben suchen",
+		"ack.fallback":         "Verstanden — %s.",
+		"done.summary":         "Das reicht, um loszulegen — %s. Fragen Sie einfach, was Sie brauchen, ich suche danach.",
+		"meter.label":          "%d %% des Profils bekannt",
+		"crewSize.suffix":      "Leute",
+		"chip.remove":          "entfernen",
+		"region.placeholder":   "Region ändern",
+		"crewSize.placeholder": "Mannstärke",
+		"edit.update":          "übernehmen",
+		"profile.empty":        "noch ohne Angaben",
+	},
+	i18n.EN: {
+		"field.role": "role", "field.trades": "trades", "field.regions": "region",
+		"field.crewSize": "crew size", "field.documents": "documents", "field.availability": "availability",
+		"turn.you": "you", "turn.mm": "mm",
+		"nudge.text":           "Nothing new caught my ear the last couple of times — happy to keep going, or:",
+		"nudge.button":         "that's enough, let's go",
+		"skip.link":            "Search without answering more",
+		"ack.fallback":         "Got it — %s.",
+		"done.summary":         "That is enough to work with — %s. Ask me for what you need and I will search against it.",
+		"meter.label":          "profile %d%% known",
+		"crewSize.suffix":      "people",
+		"chip.remove":          "remove",
+		"region.placeholder":   "change region",
+		"crewSize.placeholder": "crew size",
+		"edit.update":          "update",
+		"profile.empty":        "no details yet",
+	},
+}
+
+// lt looks up a package-local fragment, falling back to English.
+func lt(lang i18n.Lang, key string) string {
+	if m, ok := localLabel[lang]; ok {
+		if s, ok := m[key]; ok {
+			return s
+		}
+	}
+	return localLabel[i18n.EN][key]
+}
+
 // NextQuestion returns the question to ask next, and whether onboarding is
 // done. The order follows model.ProfileFields so the progress meter is
 // honest, and it never returns a question about a field the profile already
 // knows.
-func NextQuestion(p model.Profile) (string, bool) {
+func NextQuestion(p model.Profile, lang i18n.Lang) (string, bool) {
 	for _, field := range model.ProfileFields {
 		switch field {
 		case "role":
 			if p.Role == "" || p.Role == "unknown" {
-				return "Are you looking for a crew, or looking for work?", false
+				return i18n.T(lang, "onboarding.role"), false
 			}
 		case "trades":
 			if len(p.Trades) == 0 {
 				if p.Role == "executor" {
-					return "What trades does your crew cover?", false
+					return i18n.T(lang, "onboarding.tradesSU"), false
 				}
-				return "What kind of work do you need done?", false
+				return i18n.T(lang, "onboarding.tradesGU"), false
 			}
 		case "regions":
 			if len(p.Regions) == 0 {
-				return "Which region — city or country?", false
+				return i18n.T(lang, "onboarding.regions"), false
 			}
 		case "crewSize":
 			if p.CrewSize == 0 {
 				if p.Role == "executor" {
-					return "How many people can you field?", false
+					return i18n.T(lang, "onboarding.crewSizeSU"), false
 				}
-				return "How many people do you need?", false
+				return i18n.T(lang, "onboarding.crewSizeGU"), false
 			}
 		case "documents":
 			if len(p.Documents) == 0 {
-				return "Which papers are ready — A1, insurance, certificates?", false
+				return i18n.T(lang, "onboarding.documents"), false
 			}
 		case "availability":
 			if strings.TrimSpace(p.Availability) == "" {
-				return "When does it start, and for how long?", false
+				return i18n.T(lang, "onboarding.availability"), false
 			}
 		}
 	}
@@ -150,38 +212,67 @@ func NextQuestion(p model.Profile) (string, bool) {
 }
 
 // missingFields lists every ProfileFields entry still unfilled, in order, as
-// short labels for the completeness meter.
-func missingFields(p model.Profile) []string {
+// short localized labels for the completeness meter.
+func missingFields(p model.Profile, lang i18n.Lang) []string {
 	var out []string
 	for _, field := range model.ProfileFields {
 		switch field {
 		case "role":
 			if p.Role == "" || p.Role == "unknown" {
-				out = append(out, "role")
+				out = append(out, lt(lang, "field.role"))
 			}
 		case "trades":
 			if len(p.Trades) == 0 {
-				out = append(out, "trades")
+				out = append(out, lt(lang, "field.trades"))
 			}
 		case "regions":
 			if len(p.Regions) == 0 {
-				out = append(out, "region")
+				out = append(out, lt(lang, "field.regions"))
 			}
 		case "crewSize":
 			if p.CrewSize == 0 {
-				out = append(out, "crew size")
+				out = append(out, lt(lang, "field.crewSize"))
 			}
 		case "documents":
 			if len(p.Documents) == 0 {
-				out = append(out, "documents")
+				out = append(out, lt(lang, "field.documents"))
 			}
 		case "availability":
 			if strings.TrimSpace(p.Availability) == "" {
-				out = append(out, "availability")
+				out = append(out, lt(lang, "field.availability"))
 			}
 		}
 	}
 	return out
+}
+
+// describeProfile renders the searchable facts of a profile as one short,
+// localized clause, for the done-summary sentence. An empty profile (a
+// visitor who skipped everything) still renders something coherent.
+func describeProfile(p model.Profile, lang i18n.Lang) string {
+	var parts []string
+	if p.Role == "owner" || p.Role == "executor" {
+		parts = append(parts, i18n.T(lang, "role."+p.Role))
+	}
+	if len(p.Trades) > 0 {
+		parts = append(parts, joinLabels(lang, "trade.", p.Trades))
+	}
+	desc := strings.Join(parts, ", ")
+	if len(p.Regions) > 0 {
+		desc = strings.TrimSpace(desc + " in " + p.Regions[0])
+	}
+	if desc == "" {
+		return lt(lang, "profile.empty")
+	}
+	return desc
+}
+
+func joinLabels(lang i18n.Lang, prefix string, slugs []string) string {
+	names := make([]string, len(slugs))
+	for i, s := range slugs {
+		names[i] = i18n.T(lang, prefix+s)
+	}
+	return strings.Join(names, ", ")
 }
 
 var (
@@ -189,15 +280,43 @@ var (
 	knownDocs   = []string{"a1", "insurance", "certificates", "tax"}
 )
 
+// synonym maps one surface form — German or English — onto a normalized
+// slug, for the no-model keyword fallback.
+type synonym struct{ word, slug string }
+
+// tradeSynonyms covers both languages the app serves. German compounds come
+// before their shorter stems so nothing is lost to substring order; because
+// merges dedupe by slug, the order otherwise does not matter.
+var tradeSynonyms = []synonym{
+	{"electrical", "electrical"}, {"elektroinstallation", "electrical"}, {"elektriker", "electrical"}, {"elektro", "electrical"},
+	{"sanitary", "sanitary"}, {"sanitär", "sanitary"}, {"sanitaer", "sanitary"},
+	{"steel", "steel"}, {"stahlbau", "steel"}, {"stahl", "steel"},
+	{"interior", "interior"}, {"innenausbau", "interior"},
+	{"energy", "energy"}, {"energietechnik", "energy"}, {"energie", "energy"},
+	{"drywall", "drywall"}, {"trockenbau", "drywall"},
+	{"hvac", "hvac"}, {"heizung", "hvac"}, {"klima", "hvac"}, {"lüftung", "hvac"}, {"lueftung", "hvac"},
+}
+
+// docSynonyms is the same idea for the paperwork a crew might have ready.
+var docSynonyms = []synonym{
+	{"a1", "a1"},
+	{"insurance", "insurance"}, {"betriebshaftpflicht", "insurance"}, {"haftpflicht", "insurance"}, {"versicherung", "insurance"},
+	{"certificates", "certificates"}, {"fachnachweise", "certificates"}, {"nachweise", "certificates"}, {"nachweis", "certificates"}, {"zertifikate", "certificates"}, {"zertifikat", "certificates"},
+	{"tax", "tax"}, {"steuerunterlagen", "tax"}, {"steuer", "tax"},
+}
+
 const extractionSchema = `{"role":"owner|executor|unknown","trades":["slug"],"regions":["City, CC"],` +
 	`"crewSize":0,"languages":["de"],"documents":["a1|insurance|certificates|tax"],` +
 	`"availability":"free text","company":"","notes":""}`
 
 // Extract merges whatever the model can see in one message into the profile.
 // Fields it cannot see must come back empty — inventing a trade is worse than
-// asking one more question. A dense, well-written sentence should fill every
-// field it touches in this single pass.
-func Extract(ctx context.Context, deps app.Deps, p model.Profile, message string) model.Profile {
+// asking one more question. A dense, well-written sentence — in German or
+// English — should fill every field it touches in this single pass. lang is
+// the visitor's page language: it is told to the model so free-text fields
+// (availability, company, notes) come back in the language the visitor wrote
+// them in, not translated.
+func Extract(ctx context.Context, deps app.Deps, p model.Profile, message string, lang i18n.Lang) model.Profile {
 	if deps.LLM == nil {
 		return mergeMechanical(p, message)
 	}
@@ -216,13 +335,15 @@ func Extract(ctx context.Context, deps app.Deps, p model.Profile, message string
 		MaxTokens:   1024,
 		Temperature: 0.1,
 		Messages: []llm.Message{
-			{Role: "system", Content: "You extract structured facts from one message a construction professional wrote about themselves, " +
+			{Role: "system", Content: "You extract structured facts from one message a construction professional wrote about themselves, in German or English, " +
 				"often a single dense sentence covering several facts at once — read all of it, fill every field it supports. " +
 				"Only fill a field if the message actually says it. Leave everything else empty or zero. " +
 				"role: owner = needs a crew (Generalunternehmer), executor = offers work (Subunternehmer); " +
-				"a crew describing its own trades and availability without asking for help is almost always executor. " +
-				"trades: lowercase slugs from electrical, sanitary, steel, interior, energy, drywall, hvac. " +
-				"regions: \"City, CC\" (ISO country code) when the country can be inferred, otherwise just the city."},
+				"a crew describing its own trades and availability without asking for help — including a German sentence opening with \"wir sind\" or \"wir haben\" — is almost always executor. " +
+				"trades: lowercase slugs from electrical, sanitary, steel, interior, energy, drywall, hvac — map German trade words onto them too (Elektro→electrical, Sanitär→sanitary, Stahlbau→steel, Innenausbau→interior, Energietechnik→energy, Trockenbau→drywall, Heizung/Klima→hvac). " +
+				"documents: lowercase slugs from a1, insurance, certificates, tax — map German paper words onto them too (A1-Bescheinigung→a1, Versicherung/Haftpflicht→insurance, Nachweise/Zertifikate→certificates, Steuerunterlagen→tax). " +
+				"regions: \"City, CC\" (ISO country code) when the country can be inferred, e.g. \"Raum München\" → \"München, DE\" — otherwise just the city. " +
+				"Extracted free-text fields (availability, company, notes) must stay in the language the visitor wrote them in — never translate them.\n\n" + i18n.AnswerIn(lang)},
 			{Role: "user", Content: message},
 		},
 	}
@@ -234,7 +355,9 @@ func Extract(ctx context.Context, deps app.Deps, p model.Profile, message string
 		p.Role = got.Role
 	}
 	p.Trades = mergeList(p.Trades, got.Trades)
-	p.Regions = mergeList(p.Regions, got.Regions)
+	// Regions keep the case the visitor used: "München, DE" is a place name,
+	// not a slug, and it is rendered back to them as a chip.
+	p.Regions = mergeNames(p.Regions, got.Regions)
 	p.Languages = mergeList(p.Languages, got.Languages)
 	p.Documents = mergeList(p.Documents, got.Documents)
 	if got.CrewSize > 0 {
@@ -252,28 +375,38 @@ func Extract(ctx context.Context, deps app.Deps, p model.Profile, message string
 	return p
 }
 
-// mergeMechanical is the no-model path: crude keyword spotting, so onboarding
-// still moves forward when the cluster is down.
+// containsAny reports whether s contains any of subs.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeMechanical is the no-model path: crude keyword spotting in German and
+// English, so onboarding still moves forward when the cluster is down.
 func mergeMechanical(p model.Profile, message string) model.Profile {
 	m := strings.ToLower(message)
 	switch {
-	case strings.Contains(m, "need") || strings.Contains(m, "hire") || strings.Contains(m, "looking for a crew"):
+	case containsAny(m, "need", "hire", "looking for a crew", "brauchen", "suchen eine kolonne", "gesucht"):
 		if p.Role == "" || p.Role == "unknown" {
 			p.Role = "owner"
 		}
-	case strings.Contains(m, "offer") || strings.Contains(m, "my crew") || strings.Contains(m, "we're") || strings.Contains(m, "we are") || strings.Contains(m, "looking for work"):
+	case containsAny(m, "offer", "my crew", "we're", "we are", "looking for work", "wir sind", "unsere kolonne", "wir bieten", "wir haben"):
 		if p.Role == "" || p.Role == "unknown" {
 			p.Role = "executor"
 		}
 	}
-	for _, trade := range knownTrades {
-		if strings.Contains(m, trade) {
-			p.Trades = mergeList(p.Trades, []string{trade})
+	for _, syn := range tradeSynonyms {
+		if strings.Contains(m, syn.word) {
+			p.Trades = mergeList(p.Trades, []string{syn.slug})
 		}
 	}
-	for _, doc := range knownDocs {
-		if strings.Contains(m, doc) {
-			p.Documents = mergeList(p.Documents, []string{doc})
+	for _, syn := range docSynonyms {
+		if strings.Contains(m, syn.word) {
+			p.Documents = mergeList(p.Documents, []string{syn.slug})
 		}
 	}
 	if p.Notes == "" {
@@ -283,18 +416,15 @@ func mergeMechanical(p model.Profile, message string) model.Profile {
 }
 
 // isCorrection guesses whether a message is fixing something already said,
-// rather than adding something new. It only needs to be right often enough
-// to route to the extraction mode that can remove and replace — a false
-// negative just falls back to merge, which still lets the fact through.
+// rather than adding something new, in German or English. It only needs to
+// be right often enough to route to the extraction mode that can remove and
+// replace — a false negative just falls back to merge, which still lets the
+// fact through.
 func isCorrection(message string) bool {
 	m := strings.ToLower(strings.TrimSpace(message)) + " "
-	cues := []string{"no, ", "no ", "not ", "actually", "instead", "wrong", "mistake", "correction", "should be", "n't "}
-	for _, cue := range cues {
-		if strings.Contains(m, cue) {
-			return true
-		}
-	}
-	return false
+	return containsAny(m,
+		"no, ", "no ", "not ", "actually", "instead", "wrong", "mistake", "correction", "should be", "n't ",
+		"nein", "nicht ", "kein ", "keine ", "falsch", "eigentlich", "stattdessen", "fehler", "korrektur", "sollte", "doch nicht")
 }
 
 const correctionSchema = `{"remove":{"trades":["slug"],"regions":["City, CC"],"documents":["a1|insurance|certificates|tax"],"languages":["de"]},` +
@@ -305,7 +435,7 @@ const correctionSchema = `{"remove":{"trades":["slug"],"regions":["City, CC"],"d
 // holds: values named for removal come out, values named as their
 // replacement go in. Unlike Extract, silence about a field means "leave it
 // alone" — a correction only ever touches what the visitor is correcting.
-func ExtractCorrection(ctx context.Context, deps app.Deps, p model.Profile, message string) model.Profile {
+func ExtractCorrection(ctx context.Context, deps app.Deps, p model.Profile, message string, lang i18n.Lang) model.Profile {
 	if deps.LLM == nil {
 		return mechanicalCorrection(p, message)
 	}
@@ -331,11 +461,11 @@ func ExtractCorrection(ctx context.Context, deps app.Deps, p model.Profile, mess
 		MaxTokens:   768,
 		Temperature: 0.1,
 		Messages: []llm.Message{
-			{Role: "system", Content: "The visitor is correcting a fact they stated earlier, e.g. \"no, we do sanitary, not electrical\". " +
+			{Role: "system", Content: "The visitor is correcting a fact they stated earlier, in German or English, e.g. \"no, we do sanitary, not electrical\" or \"nein, wir machen Sanitär, nicht Elektro\". " +
 				"Put what must be removed under remove, and what replaces it under add. " +
 				"Only include a field at all if this message is actually correcting it — do not restate facts that are not being changed. " +
 				"role/crewSize/availability/company are single values: only set one if the visitor is replacing that exact fact. " +
-				"trades must come from: " + strings.Join(knownTrades, ", ") + ". documents must come from: " + strings.Join(knownDocs, ", ") + "."},
+				"trades must come from: " + strings.Join(knownTrades, ", ") + " (map German trade words the same way extraction does). documents must come from: " + strings.Join(knownDocs, ", ") + ".\n\n" + i18n.AnswerIn(lang)},
 			{Role: "user", Content: message},
 		},
 	}
@@ -363,27 +493,49 @@ func ExtractCorrection(ctx context.Context, deps app.Deps, p model.Profile, mess
 }
 
 // mechanicalCorrection is the no-model correction path: it looks for
-// "not <trade>" / "no <trade>" to remove, and any other known trade or
-// document mentioned to add.
+// "not <trade>" / "no <trade>" / "nicht <trade>" / "kein(e) <trade>" to
+// remove, and any other known trade or document mentioned to add.
 func mechanicalCorrection(p model.Profile, message string) model.Profile {
 	m := strings.ToLower(message)
-	for _, trade := range knownTrades {
+	for _, syn := range tradeSynonyms {
 		switch {
-		case strings.Contains(m, "not "+trade), strings.Contains(m, "no "+trade):
-			p.Trades = removeValue(p.Trades, trade)
-		case strings.Contains(m, trade):
-			p.Trades = mergeList(p.Trades, []string{trade})
+		case containsAny(m, "not "+syn.word, "no "+syn.word, "nicht "+syn.word, "kein "+syn.word, "keine "+syn.word):
+			p.Trades = removeValue(p.Trades, syn.slug)
+		case strings.Contains(m, syn.word):
+			p.Trades = mergeList(p.Trades, []string{syn.slug})
 		}
 	}
-	for _, doc := range knownDocs {
+	for _, syn := range docSynonyms {
 		switch {
-		case strings.Contains(m, "not "+doc), strings.Contains(m, "no "+doc):
-			p.Documents = removeValue(p.Documents, doc)
-		case strings.Contains(m, doc):
-			p.Documents = mergeList(p.Documents, []string{doc})
+		case containsAny(m, "not "+syn.word, "no "+syn.word, "nicht "+syn.word, "kein "+syn.word, "keine "+syn.word):
+			p.Documents = removeValue(p.Documents, syn.slug)
+		case strings.Contains(m, syn.word):
+			p.Documents = mergeList(p.Documents, []string{syn.slug})
 		}
 	}
 	return p
+}
+
+// mergeNames merges human-readable values, preserving their case while still
+// de-duplicating case-insensitively.
+func mergeNames(have, add []string) []string {
+	for _, a := range add {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		found := false
+		for _, h := range have {
+			if strings.EqualFold(h, a) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			have = append(have, a)
+		}
+	}
+	return have
 }
 
 func mergeList(have, add []string) []string {
@@ -482,28 +634,28 @@ func newItems(have, now []string) []string {
 	return out
 }
 
-// describeLearned turns the diff between two profiles into a short, plain
+// describeLearned turns the diff between two profiles into a short, localized
 // list of what changed this turn — the hint the streamed acknowledgement is
 // built from.
-func describeLearned(before, after model.Profile) string {
+func describeLearned(before, after model.Profile, lang i18n.Lang) string {
 	var parts []string
 	if before.Role != after.Role && after.Role != "" && after.Role != "unknown" {
-		parts = append(parts, "role: "+after.Role)
+		parts = append(parts, lt(lang, "field.role")+": "+i18n.T(lang, "role."+after.Role))
 	}
 	if d := newItems(before.Trades, after.Trades); len(d) > 0 {
-		parts = append(parts, "trades: "+strings.Join(d, ", "))
+		parts = append(parts, lt(lang, "field.trades")+": "+joinLabels(lang, "trade.", d))
 	}
 	if d := newItems(before.Regions, after.Regions); len(d) > 0 {
-		parts = append(parts, "region: "+strings.Join(d, ", "))
+		parts = append(parts, lt(lang, "field.regions")+": "+strings.Join(d, ", "))
 	}
 	if before.CrewSize != after.CrewSize && after.CrewSize > 0 {
-		parts = append(parts, fmt.Sprintf("crew size: %d", after.CrewSize))
+		parts = append(parts, fmt.Sprintf("%s: %d", lt(lang, "field.crewSize"), after.CrewSize))
 	}
 	if d := newItems(before.Documents, after.Documents); len(d) > 0 {
-		parts = append(parts, "documents: "+strings.Join(d, ", "))
+		parts = append(parts, lt(lang, "field.documents")+": "+joinLabels(lang, "doc.", d))
 	}
 	if before.Availability != after.Availability && strings.TrimSpace(after.Availability) != "" {
-		parts = append(parts, "availability: "+after.Availability)
+		parts = append(parts, lt(lang, "field.availability")+": "+after.Availability)
 	}
 	return strings.Join(parts, "; ")
 }
@@ -593,31 +745,121 @@ func (h *Handler) resetTurns(profileID string) {
 
 // --- handlers ---------------------------------------------------------------
 
+// chip pairs the raw slug a chip's remove button submits with its localized
+// display label, so a trade/document chip can read in the visitor's language
+// while still editing the same underlying value.
+type chip struct {
+	Value string
+	Label string
+	Aria  string
+}
+
 type profileView struct {
 	model.Profile
-	Missing []string
+	Lang                i18n.Lang
+	RoleLabel           string
+	TradesView          []chip
+	DocsView            []chip
+	CrewSizeLabel       string
+	CrewSizeAria        string
+	AvailabilityAria    string
+	Missing             []string
+	KnownLabel          string
+	StillMissingLabel   string
+	ResetLabel          string
+	RegionPlaceholder   string
+	CrewSizePlaceholder string
+	UpdateLabel         string
+}
+
+func newProfileView(p model.Profile, lang i18n.Lang) profileView {
+	v := profileView{
+		Profile:             p,
+		Lang:                lang,
+		Missing:             missingFields(p, lang),
+		KnownLabel:          i18n.T(lang, "onboarding.known"),
+		StillMissingLabel:   i18n.T(lang, "onboarding.stillMissing"),
+		ResetLabel:          i18n.T(lang, "onboarding.reset"),
+		RegionPlaceholder:   lt(lang, "region.placeholder"),
+		CrewSizePlaceholder: lt(lang, "crewSize.placeholder"),
+		UpdateLabel:         lt(lang, "edit.update"),
+	}
+	remove := lt(lang, "chip.remove")
+	if p.Role == "owner" || p.Role == "executor" {
+		v.RoleLabel = i18n.T(lang, "role."+p.Role)
+	}
+	for _, t := range p.Trades {
+		label := i18n.T(lang, "trade."+t)
+		v.TradesView = append(v.TradesView, chip{Value: t, Label: label, Aria: label + " " + remove})
+	}
+	for _, d := range p.Documents {
+		label := i18n.T(lang, "doc."+d)
+		v.DocsView = append(v.DocsView, chip{Value: d, Label: label, Aria: label + " " + remove})
+	}
+	if p.CrewSize > 0 {
+		v.CrewSizeLabel = fmt.Sprintf("%d %s", p.CrewSize, lt(lang, "crewSize.suffix"))
+		v.CrewSizeAria = v.CrewSizeLabel + " " + remove
+	}
+	if p.Availability != "" {
+		v.AvailabilityAria = p.Availability + " " + remove
+	}
+	return v
 }
 
 type threadView struct {
 	Profile     model.Profile
+	Lang        i18n.Lang
 	Question    string
+	Why         string
 	Done        bool
+	DoneSummary string
 	Echo        string
+	YouLabel    string
 	Progress    int
+	MeterLabel  string
 	Learned     bool
 	OfferFinish bool
+	NudgeText   string
+	NudgeButton string
+	SkipLabel   string
 	ProfileView profileView
 	StreamURL   string
 }
 
+// newThreadView fills in the language-derived fields every render of the
+// thread needs, regardless of which handler is rendering it.
+func newThreadView(p model.Profile, lang i18n.Lang) threadView {
+	progress := store.Completeness(p)
+	return threadView{
+		Profile:     p,
+		Lang:        lang,
+		Progress:    progress,
+		MeterLabel:  fmt.Sprintf(lt(lang, "meter.label"), progress),
+		YouLabel:    lt(lang, "turn.you"),
+		SkipLabel:   lt(lang, "skip.link"),
+		NudgeText:   lt(lang, "nudge.text"),
+		NudgeButton: lt(lang, "nudge.button"),
+	}
+}
+
 func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.Detect(r)
 	p, err := Ensure(w, r, h.deps)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	question, done := NextQuestion(p)
-	h.render(w, threadView{Profile: p, Question: question, Done: done, Progress: store.Completeness(p)})
+	view := newThreadView(p, lang)
+	view.Progress = store.Completeness(p)
+	view.MeterLabel = fmt.Sprintf(lt(lang, "meter.label"), view.Progress)
+	question, done := NextQuestion(p, lang)
+	view.Question, view.Done = question, done
+	if done {
+		view.DoneSummary = fmt.Sprintf(lt(lang, "done.summary"), describeProfile(p, lang))
+	} else {
+		view.Why = i18n.T(lang, "onboarding.why")
+	}
+	h.render(w, view)
 }
 
 // Turn takes one message, learns from it, and asks the next open question.
@@ -627,6 +869,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 // also wires up a streamed one-line acknowledgement as a progressive
 // enhancement on top.
 func (h *Handler) Turn(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.Detect(r)
 	message := strings.TrimSpace(firstNonEmpty(r.FormValue("message"), r.URL.Query().Get("message")))
 	p, err := Ensure(w, r, h.deps)
 	if err != nil {
@@ -634,8 +877,15 @@ func (h *Handler) Turn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if message == "" {
-		question, done := NextQuestion(p)
-		h.render(w, threadView{Profile: p, Question: question, Done: done, Progress: store.Completeness(p)})
+		view := newThreadView(p, lang)
+		question, done := NextQuestion(p, lang)
+		view.Question, view.Done = question, done
+		if done {
+			view.DoneSummary = fmt.Sprintf(lt(lang, "done.summary"), describeProfile(p, lang))
+		} else {
+			view.Why = i18n.T(lang, "onboarding.why")
+		}
+		h.render(w, view)
 		return
 	}
 
@@ -643,9 +893,9 @@ func (h *Handler) Turn(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	before := p
 	if isCorrection(message) {
-		p = ExtractCorrection(ctx, h.deps, p, message)
+		p = ExtractCorrection(ctx, h.deps, p, message, lang)
 	} else {
-		p = Extract(ctx, h.deps, p, message)
+		p = Extract(ctx, h.deps, p, message, lang)
 	}
 	saved, err := h.deps.Store.UpsertProfile(ctx, p)
 	if err != nil {
@@ -655,20 +905,22 @@ func (h *Handler) Turn(w http.ResponseWriter, r *http.Request) {
 
 	learned := !factsEqual(before, saved)
 	offerFinish := h.noteTurn(saved.ID, learned)
-	question, done := NextQuestion(saved)
+	question, done := NextQuestion(saved, lang)
 
-	view := threadView{
-		Profile:     saved,
-		Question:    question,
-		Done:        done,
-		Echo:        message,
-		Progress:    saved.Completeness,
-		Learned:     learned,
-		OfferFinish: offerFinish && !done,
+	view := newThreadView(saved, lang)
+	view.Progress = saved.Completeness
+	view.MeterLabel = fmt.Sprintf(lt(lang, "meter.label"), saved.Completeness)
+	view.Question = question
+	view.Done = done
+	view.Echo = message
+	view.Learned = learned
+	view.OfferFinish = offerFinish && !done
+	if done {
+		view.DoneSummary = fmt.Sprintf(lt(lang, "done.summary"), describeProfile(saved, lang))
 	}
 	if learned {
-		view.ProfileView = profileView{Profile: saved, Missing: missingFields(saved)}
-		view.StreamURL = "/start/stream?" + url.Values{"hint": {describeLearned(before, saved)}}.Encode()
+		view.ProfileView = newProfileView(saved, lang)
+		view.StreamURL = "/start/stream?" + url.Values{"hint": {describeLearned(before, saved, lang)}}.Encode()
 	}
 	h.render(w, view)
 }
@@ -680,6 +932,7 @@ func (h *Handler) Turn(w http.ResponseWriter, r *http.Request) {
 // started, so a dropped connection here can never leave it half-written.
 func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	lang := i18n.Detect(r)
 	hint := strings.TrimSpace(r.URL.Query().Get("hint"))
 
 	flusher, ok := w.(http.Flusher)
@@ -702,7 +955,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	if hint == "" || ctx.Err() != nil {
 		return
 	}
-	fallback := "Got it — " + hint + "."
+	fallback := fmt.Sprintf(lt(lang, "ack.fallback"), hint)
 	if h.deps.LLM == nil {
 		writeSSE(w, "message", html.EscapeString(fallback))
 		flusher.Flush()
@@ -715,7 +968,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		Messages: []llm.Message{
 			{Role: "system", Content: "You are the onboarding voice of a construction crew marketplace. " +
 				"In one short, warm sentence (under 25 words) confirm exactly the facts listed below — nothing else, " +
-				"no greeting, no question, no restating things not listed."},
+				"no greeting, no question, no restating things not listed.\n\n" + i18n.AnswerIn(lang)},
 			{Role: "user", Content: hint},
 		},
 	}
@@ -751,12 +1004,13 @@ func writeSSE(w http.ResponseWriter, event, data string) {
 }
 
 func (h *Handler) profilePanel(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.Detect(r)
 	p, ok := Current(r, h.deps)
 	if !ok {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	h.renderProfile(w, p)
+	h.renderProfile(w, p, lang)
 }
 
 // profileEdit applies one chip-level edit (remove a trade, change a region,
@@ -771,6 +1025,7 @@ func (h *Handler) profileEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	lang := i18n.Detect(r)
 	p, ok := Current(r, h.deps)
 	if !ok {
 		w.WriteHeader(http.StatusNoContent)
@@ -786,26 +1041,33 @@ func (h *Handler) profileEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.resetTurns(saved.ID)
-	h.renderProfile(w, saved)
+	h.renderProfile(w, saved, lang)
 }
 
-func (h *Handler) renderProfile(w http.ResponseWriter, p model.Profile) {
+func (h *Handler) renderProfile(w http.ResponseWriter, p model.Profile, lang i18n.Lang) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.tpl.ExecuteTemplate(w, "profile", profileView{Profile: p, Missing: missingFields(p)}); err != nil {
+	if err := h.tpl.ExecuteTemplate(w, "profile", newProfileView(p, lang)); err != nil {
 		log.Printf("onboarding: render profile: %v", err)
 	}
 }
 
 // finish lets a visitor stop onboarding early — most useful after the
-// "offer to finish" nudge — without inventing facts to force completeness.
+// "offer to finish" nudge, or right away via the persistent skip link —
+// without inventing facts to force completeness.
 func (h *Handler) finish(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.Detect(r)
 	p, ok := Current(r, h.deps)
 	if !ok {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	h.resetTurns(p.ID)
-	h.render(w, threadView{Profile: p, Done: true, Progress: p.Completeness})
+	view := newThreadView(p, lang)
+	view.Progress = p.Completeness
+	view.MeterLabel = fmt.Sprintf(lt(lang, "meter.label"), p.Completeness)
+	view.Done = true
+	view.DoneSummary = fmt.Sprintf(lt(lang, "done.summary"), describeProfile(p, lang))
+	h.render(w, view)
 }
 
 func (h *Handler) reset(w http.ResponseWriter, r *http.Request) {
@@ -816,7 +1078,7 @@ func (h *Handler) reset(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) render(w http.ResponseWriter, v threadView) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if v.Echo != "" {
-		fmt.Fprintf(w, `<div class="mm-msg you"><span class="mm-who">you</span><p>%s</p></div>`, html.EscapeString(v.Echo))
+		fmt.Fprintf(w, `<div class="mm-msg you"><span class="mm-who">%s</span><p>%s</p></div>`, html.EscapeString(v.YouLabel), html.EscapeString(v.Echo))
 	}
 	if err := h.tpl.ExecuteTemplate(w, "thread", v); err != nil {
 		log.Printf("onboarding: render thread: %v", err)
