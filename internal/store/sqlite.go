@@ -76,6 +76,7 @@ var numberedMigrations = []struct {
 	{2, addOfferFacetColumns},
 	{3, backfillOfferFacets},
 	{4, dedupeAndIndexSavedSearches},
+	{5, buildFullTextIndex},
 }
 
 func (s *SQLite) migrate() error {
